@@ -54,7 +54,8 @@ $trigger   = New-ScheduledTaskTrigger -AtLogOn
 $repeat    = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)
 $trigger.Repetition = $repeat.Repetition
 $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited
-$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
+# Priority 4 (normal): bawaan Task Scheduler adalah 7 (di bawah normal), yang memperlambat agent saat logon ramai
+$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 4 `
              -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName "LabAgent" -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force | Out-Null
