@@ -240,3 +240,17 @@ def test_shutdown_targets_only_the_chosen_pc(client):
     client.post("/api/pcs/PC-02/command", json={"action": "shutdown"}, headers=ADMIN)
     assert poll(client).get_json()["commands"] == []
     assert poll(client, host="PC-02").get_json()["commands"] == ["shutdown"]
+
+
+def test_server_restart_needs_admin_and_systemd(client, monkeypatch):
+    called = []
+    client.application.config["EXIT_FN"] = lambda: called.append(1)
+    assert client.post("/api/server/restart").status_code == 401
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    assert client.post("/api/server/restart", headers=ADMIN).status_code == 409
+    assert called == []
+    monkeypatch.setenv("INVOCATION_ID", "abc")
+    assert client.post("/api/server/restart", headers=ADMIN).status_code == 200
+    import time
+    time.sleep(0.05)
+    assert called == [1]

@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import secrets
 import threading
@@ -302,6 +303,21 @@ def create_app(cfg: Config) -> Flask:
         else:
             abort(404)
         store.add_event("*", "info", detail)
+        return jsonify(ok=True)
+
+    def exit_process():
+        time.sleep(1)   # beri waktu agar respons terkirim; systemd (Restart=always) menyalakan ulang
+        os._exit(0)
+
+    app.config["EXIT_FN"] = exit_process
+
+    @app.post("/api/server/restart")
+    def api_server_restart():
+        admin_only()
+        if not os.environ.get("INVOCATION_ID"):
+            abort(409, "server tidak berjalan di bawah systemd, restart manual")
+        store.add_event("*", "info", "Admin me-restart server")
+        threading.Thread(target=app.config["EXIT_FN"], daemon=True).start()
         return jsonify(ok=True)
 
     def notice_from_request():

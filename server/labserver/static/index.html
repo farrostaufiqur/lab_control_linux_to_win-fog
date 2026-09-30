@@ -68,6 +68,7 @@
   <button data-all="unlock">Buka semua</button>
   <button data-all="clear">Semua ikut jadwal</button>
   <button data-msg="*">Pesan ke semua</button>
+  <button id="restart-server">Restart server</button>
 </header>
 <main>
   <section>
@@ -266,6 +267,16 @@ async function loadTimezones() {
     `<optgroup label="Lainnya">${zones.filter((z) => !first.includes(z)).map(option).join("")}</optgroup>`;
   $("#tz").value = current;
 }
+$("#restart-server").onclick = async () => {
+  if (!confirm("Restart server? Dashboard terputus beberapa detik. PC lab tetap terkunci/terbuka sesuai status terakhir.")) return;
+  try {
+    await api("/api/server/restart", "POST");
+    $("#err").textContent = "Server dimulai ulang…";
+    const wait = setInterval(async () => {
+      try { await api("/api/pcs"); clearInterval(wait); $("#err").textContent = ""; refresh(); } catch (e) {}
+    }, 2000);
+  } catch (e) { $("#err").textContent = e.message; }
+};
 $("#tz").onchange = async () => {
   try { await api("/api/timezone", "PUT", { timezone: $("#tz").value }); $("#err").textContent = ""; refresh(); }
   catch (e) { $("#err").textContent = e.message; }
