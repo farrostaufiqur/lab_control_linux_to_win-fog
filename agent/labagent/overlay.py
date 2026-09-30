@@ -100,7 +100,9 @@ class Overlay:
     def _update(self):
         now = time.time()
         view = self.agent.view(now)
-        self.policies.apply(view.locked, self.cfg.always_block_taskmgr and not view.exempt)
+        errors = self.policies.apply(view.locked, self.cfg.always_block_taskmgr and not view.exempt)
+        if errors:  # kunci layar tetap jalan walau kebijakan registry gagal
+            self.agent.add_event("info", "Kebijakan registry gagal ditulis: " + "; ".join(errors))
         self.blocker.active = view.locked
 
         if view.locked:

@@ -183,18 +183,28 @@ class LockdownPolicies:
     def __init__(self):
         self._state: tuple[bool, bool] | None = None
 
-    def apply(self, locked: bool, block_taskmgr: bool) -> None:
+    def apply(self, locked: bool, block_taskmgr: bool) -> list[str]:
+        """Mengembalikan daftar kebijakan yang gagal ditulis (kosong bila semua berhasil)."""
         state = (locked, locked or block_taskmgr)
         if state == self._state:
-            return
+            return []
         previous = self._state or (None, None)
+        errors: list[str] = []
+
+        def write(subkey: str, name: str, enabled: bool) -> None:
+            try:
+                _set_policy(subkey, name, enabled)
+            except OSError as exc:
+                errors.append(f"{name} ({exc})")
+
         if state[0] != previous[0]:
-            _set_policy(_SYSTEM, "DisableLockWorkstation", locked)
-            _set_policy(_SYSTEM, "DisableChangePassword", locked)
-            _set_policy(_EXPLORER, "NoLogoff", locked)
+            write(_SYSTEM, "DisableLockWorkstation", locked)
+            write(_SYSTEM, "DisableChangePassword", locked)
+            write(_EXPLORER, "NoLogoff", locked)
         if state[1] != previous[1]:
-            _set_policy(_SYSTEM, "DisableTaskMgr", state[1])
-        self._state = state
+            write(_SYSTEM, "DisableTaskMgr", state[1])
+        self._state = state  # tidak diulang tiap tick; dicoba lagi saat status kunci berubah
+        return errors
 
 
 # --- pemulihan darurat: cek drive & copot agent (dipakai killswitch.py) --------
