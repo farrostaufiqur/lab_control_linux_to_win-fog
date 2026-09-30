@@ -272,3 +272,70 @@ def test_rename_validation(client):
     assert client.put("/api/pcs/PC-01/name", json={"name": "a\nb"}, headers=ADMIN).status_code == 400
     assert client.put("/api/pcs/NOPE/name", json={"name": "a"}, headers=ADMIN).status_code == 404
     assert client.put("/api/pcs/PC-01/name", json={"name": "a"}).status_code == 401
+
+
+def rename_check(client, host="PC-01"):
+    return client.post("/api/agent/release", json={"host": host, "sha": "0" * 64}, headers=AGENT).get_json()["rename"]
+
+
+def rename_result(client, name, ok=True, host="PC-01", error=""):
+    return client.post("/api/agent/rename-result", json={"host": host, "name": name, "ok": ok, "error": error}, headers=AGENT)
+
+
+def test_windows_rename_full_flow_keeps_settings_and_history(client):
+    poll(client)
+    client.put("/api/pcs/PC-01/name", json={"name": "Meja 1"}, headers=ADMIN)
+    client.post("/api/pcs/PC-01/lock", json={}, headers=ADMIN)
+    assert rename_check(client) is None
+    assert client.put("/api/pcs/PC-01/windows-name", json={"name": "lab-01", "restart": True}, headers=ADMIN).get_json()["name"] == "LAB-01"
+    assert rename_check(client) == {"name": "LAB-01"}
+    pc = client.get("/api/pcs", headers=ADMIN).get_json()["pcs"][0]
+    assert pc["rename"] == {"name": "LAB-01", "state": "pending", "error": None}
+
+    assert rename_result(client, "LAB-01").status_code == 200
+    assert rename_check(client) is None                      # tidak ditawarkan lagi
+    assert rename_result(client, "LAB-01").status_code == 200  # hasil ganda diabaikan
+    assert poll(client).get_json()["commands"] == ["restart"]  # restart diminta sekali saja
+    assert poll(client).get_json()["commands"] == []
+
+    reply = poll(client, host="LAB-01").get_json()            # setelah restart PC melapor dengan nama baru
+    assert reply["locked"] is True                            # override kunci ikut pindah
+    pcs = client.get("/api/pcs", headers=ADMIN).get_json()["pcs"]
+    assert [p["id"] for p in pcs] == ["LAB-01"] and pcs[0]["name"] == "Meja 1" and pcs[0]["rename"] is None
+    details = [e["detail"] for e in client.get("/api/events?pc=LAB-01", headers=ADMIN).get_json()]
+    assert any("Nama Windows diganti dari PC-01" in d for d in details)
+    assert any("Admin meminta nama Windows" in d for d in details)  # log lama ikut pindah
+
+
+def test_windows_rename_failure_is_not_retried(client):
+    poll(client)
+    client.put("/api/pcs/PC-01/windows-name", json={"name": "LAB-02"}, headers=ADMIN)
+    rename_result(client, "LAB-02", ok=False, error="Access is denied")
+    assert rename_check(client) is None
+    pc = client.get("/api/pcs", headers=ADMIN).get_json()["pcs"][0]
+    assert pc["rename"]["state"] == "failed" and pc["rename"]["error"] == "Access is denied"
+    client.put("/api/pcs/PC-01/windows-name", json={"name": "LAB-02"}, headers=ADMIN)   # admin mencoba lagi
+    assert rename_check(client) == {"name": "LAB-02"}
+
+
+def test_windows_rename_validation_and_cancel(client):
+    poll(client); poll(client, host="PC-02")
+    put = lambda name, pc="PC-01": client.put(f"/api/pcs/{pc}/windows-name", json={"name": name}, headers=ADMIN)
+    for bad in ("", "a" * 16, "-abc", "abc-", "12345", "a b", "a_b", "a.b", "PC-01"):
+        assert put(bad).status_code == 400, bad
+    assert put("pc-02").status_code == 409                    # sudah dipakai PC lain (tanpa peduli huruf besar)
+    assert put("LAB-05").status_code == 200
+    assert put("LAB-05", "PC-02").status_code == 409          # sudah diminta PC lain
+    assert client.put("/api/pcs/NOPE/windows-name", json={"name": "X"}, headers=ADMIN).status_code == 404
+    assert client.put("/api/pcs/PC-01/windows-name", json={"name": "X"}).status_code == 401
+    assert client.delete("/api/pcs/PC-01/windows-name", headers=ADMIN).status_code == 200
+    assert rename_check(client) is None
+
+
+def test_rename_result_needs_token_and_matching_request(client):
+    poll(client)
+    assert client.post("/api/agent/rename-result", json={"host": "PC-01", "name": "X1", "ok": True}).status_code == 403
+    client.put("/api/pcs/PC-01/windows-name", json={"name": "LAB-03"}, headers=ADMIN)
+    rename_result(client, "LAB-99")                            # nama tidak cocok: diabaikan
+    assert rename_check(client) == {"name": "LAB-03"}
+    assert rename_result(client, "bad name").status_code == 400

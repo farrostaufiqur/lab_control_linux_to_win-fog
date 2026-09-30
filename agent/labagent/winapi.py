@@ -277,6 +277,18 @@ def launch_update(script: str) -> None:
     run("schtasks /Run /TN LabAgentUpdate")
 
 
+COMPUTER_NAME_PHYSICAL_DNS_HOSTNAME = 5
+kernel32.SetComputerNameExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR]
+kernel32.SetComputerNameExW.restype = wintypes.BOOL
+
+
+def rename_computer(name: str) -> str | None:
+    """Ganti nama komputer (berlaku setelah restart); butuh SYSTEM/admin. None = berhasil, selain itu teks galat."""
+    if kernel32.SetComputerNameExW(COMPUTER_NAME_PHYSICAL_DNS_HOSTNAME, name):
+        return None
+    return str(ctypes.WinError(ctypes.get_last_error()))
+
+
 # --- pemulihan darurat: cek drive & copot agent (dipakai killswitch.py) --------
 DRIVE_REMOVABLE, DRIVE_FIXED = 2, 3
 SEM_FAILCRITICALERRORS = 0x0001

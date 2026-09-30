@@ -45,7 +45,7 @@ def upload(client, data=EXE, version="1.3.0", signature=None, headers=ADMIN):
 def test_upload_then_agent_gets_manifest_and_file(client):
     poll(client)
     assert client.post("/api/agent/release", json={"host": "PC-01", "sha": "0" * 64}, headers=AGENT) \
-        .get_json() == {"release": None}
+        .get_json() == {"release": None, "rename": None}
     assert upload(client).status_code == 200
     manifest = client.post("/api/agent/release", json={"host": "PC-01", "sha": "0" * 64, "version": "1.2.0"},
                            headers=AGENT).get_json()["release"]

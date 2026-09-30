@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS commands (
     delivered REAL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS renames (
+    old TEXT PRIMARY KEY,         -- hostname Windows sekarang
+    new TEXT NOT NULL,            -- hostname Windows yang diminta admin (huruf besar)
+    restart INTEGER NOT NULL,     -- 1 = restart PC begitu nama berhasil diganti
+    state TEXT NOT NULL,          -- pending | applied (menunggu restart) | failed
+    error TEXT,
+    created REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS notices (
     pc TEXT PRIMARY KEY,          -- PC id, or '*' for a message to every PC
     text TEXT NOT NULL,
@@ -117,6 +125,51 @@ class Store:
         with self.tx() as db:
             return db.execute("UPDATE pcs SET alias=? WHERE id=?", (alias, pc_id)).rowcount > 0
 
+    # ganti nama Windows -------------------------------------------------
+    def request_rename(self, old: str, new: str, restart: bool, now: float):
+        with self.tx() as db:
+            db.execute(
+                "INSERT INTO renames(old, new, restart, state, error, created) VALUES(?, ?, ?, 'pending', NULL, ?) "
+                "ON CONFLICT(old) DO UPDATE SET new=excluded.new, restart=excluded.restart, state='pending', "
+                "error=NULL, created=excluded.created",
+                (old, new, int(restart), now))
+
+    def cancel_rename(self, old: str):
+        with self.tx() as db:
+            db.execute("DELETE FROM renames WHERE old=?", (old,))
+
+    def list_renames(self) -> dict:
+        with self.tx() as db:
+            return {row["old"]: dict(row) for row in db.execute("SELECT * FROM renames")}
+
+    def rename_result(self, old: str, new: str, ok: bool, error: str) -> dict | None:
+        """Hasil dari helper. Mengembalikan permintaan yang cocok (sebelum diubah) atau None."""
+        with self.tx() as db:
+            row = db.execute("SELECT * FROM renames WHERE old=? AND new=? AND state='pending'", (old, new)).fetchone()
+            if row is None:
+                return None
+            db.execute("UPDATE renames SET state=?, error=? WHERE old=?",
+                       ("applied" if ok else "failed", None if ok else error, old))
+            return dict(row)
+
+    def migrate_renamed(self, new: str) -> str | None:
+        """PC baru muncul dengan hostname hasil ganti nama: pindahkan nama tampilan, override, dan log dari yang lama."""
+        with self.tx() as db:
+            req = db.execute("SELECT * FROM renames WHERE lower(new)=lower(?) AND state='applied'", (new,)).fetchone()
+            if req is None or req["old"] == new:
+                return None
+            old = req["old"]
+            prev = db.execute("SELECT alias, override FROM pcs WHERE id=?", (old,)).fetchone()
+            if prev is not None:
+                db.execute("UPDATE pcs SET alias=?, override=? WHERE id=?", (prev["alias"], prev["override"], new))
+            db.execute("UPDATE OR IGNORE events SET pc=? WHERE pc=?", (new, old))
+            db.execute("UPDATE OR IGNORE notices SET pc=? WHERE pc=?", (new, old))
+            db.execute("DELETE FROM pcs WHERE id=?", (old,))
+            db.execute("DELETE FROM commands WHERE pc=?", (old,))
+            db.execute("DELETE FROM notices WHERE pc=?", (old,))
+            db.execute("DELETE FROM renames WHERE old=?", (old,))
+            return old
+
     def add_event(self, pc_id: str, type_: str, detail: str, ts: float | None = None):
         with self.tx() as db:
             db.execute(
@@ -145,6 +198,7 @@ class Store:
             db.execute("DELETE FROM pcs WHERE id=?", (pc_id,))
             db.execute("DELETE FROM commands WHERE pc=?", (pc_id,))
             db.execute("DELETE FROM notices WHERE pc=?", (pc_id,))
+            db.execute("DELETE FROM renames WHERE old=?", (pc_id,))
 
     # commands -----------------------------------------------------------
     def queue_command(self, pc_id: str, action: str, now: float):

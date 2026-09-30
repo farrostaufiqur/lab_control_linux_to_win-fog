@@ -1,8 +1,9 @@
 """Proses pembantu (SYSTEM, `labagent.exe --helper`): logika murni, semua efek samping disuntikkan.
 
-Dua tugas yang tidak bisa dilakukan agent level-user:
+Tiga tugas yang tidak bisa dilakukan agent level-user:
 1. menulis kebijakan registry Ctrl+Alt+Del ke profil user atas permintaan agent (`policy.json`);
-2. mengunduh rilis baru yang ditandatangani dan menukar exe di folder pemasangan.
+2. mengunduh rilis baru yang ditandatangani dan menukar exe di folder pemasangan;
+3. mengganti nama komputer Windows atas permintaan admin (dari server, lewat jawaban cek rilis).
 
 `policy.json` ada di folder yang bisa ditulis user biasa, jadi isinya divalidasi ketat dan hanya
 empat nilai registry yang pernah ditulis. Semua berkas yang menentukan exe (unduhan, skrip, daftar
@@ -29,6 +30,7 @@ UPDATE_CHECK_SECONDS = 60.0
 UPDATE_RETRY_SECONDS = 600.0
 DOWNLOAD_JITTER_SECONDS = 120.0
 HEARTBEAT_FRESH_SECONDS = 15.0
+HOSTNAME_RE = re.compile(r"^(?!\d+$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?$")  # sama dengan server
 
 
 # --- permintaan kebijakan (agent menulis, helper membaca) ----------------------
@@ -76,6 +78,9 @@ class Ports:
     download: Callable[[str], None]                            # tulis rilis ke path
     apply_policy: Callable[[str, bool, bool], "list[str] | None"]  # None = profil belum dimuat
     launch_update: Callable[[str], None]                       # jalankan skrip pembaruan terlepas dari proses ini
+    hostname: str = ""                                         # nama komputer saat helper dimulai
+    rename_computer: "Callable[[str], str | None] | None" = None   # -> None bila berhasil, selain itu teks galat
+    report_rename: "Callable[[str, bool, str], None] | None" = None  # (nama, berhasil, galat) ke server
 
 
 class Helper:
@@ -90,6 +95,7 @@ class Helper:
         self._errors: list[str] = []
         self._next_check = 0.0
         self._pending: tuple[str, float] | None = None
+        self._renamed_to: str | None = None
         self._bad = self._load_bad()
         self._write_ok()
 
@@ -126,11 +132,11 @@ class Helper:
         except Exception as exc:
             self._errors = [f"helper: {exc!r}"]
         self._heartbeat(now)
-        if self.cfg.update_public_key and not self.finished and now >= self._next_check:
+        if not self.finished and now >= self._next_check:
             try:
-                self._update_tick(now)
+                self._check_tick(now)
             except Exception as exc:
-                self.log.append(f"cek pembaruan gagal: {exc!r}")
+                self.log.append(f"cek server gagal: {exc!r}")
                 self._next_check = now + UPDATE_CHECK_SECONDS
 
     def run_forever(self, stop: threading.Event) -> None:
@@ -162,10 +168,33 @@ class Helper:
         self._policy_key, self._policy_at, self._errors = request, now, errors
 
     # pembaruan -----------------------------------------------------------------------
-    def _update_tick(self, now: float) -> None:
+    def _check_tick(self, now: float) -> None:
         self._next_check = now + UPDATE_CHECK_SECONDS
         reply = self.ports.fetch_manifest()
-        raw = reply.get("release") if isinstance(reply, dict) else None
+        if not isinstance(reply, dict):
+            return
+        self._rename_tick(reply.get("rename"))
+        if self.cfg.update_public_key:
+            self._update_tick(now, reply.get("release"))
+
+    # ganti nama komputer -----------------------------------------------------------
+    def _rename_tick(self, request) -> None:
+        name = request.get("name") if isinstance(request, dict) else None
+        if not isinstance(name, str) or self.ports.rename_computer is None or self.ports.report_rename is None:
+            return
+        if not HOSTNAME_RE.match(name):
+            self.log.append("permintaan ganti nama tidak valid; diabaikan")
+            return
+        if name.lower() in (self.ports.hostname.lower(), (self._renamed_to or "").lower()):
+            error = None       # sudah bernama itu (mis. laporan sebelumnya hilang): lapor ulang saja
+        else:
+            error = self.ports.rename_computer(name.upper())
+            self.log.append(f"nama komputer -> {name.upper()}" if error is None else f"ganti nama gagal: {error}")
+        if error is None:
+            self._renamed_to = name
+        self.ports.report_rename(name.upper(), error is None, error or "")
+
+    def _update_tick(self, now: float, raw) -> None:
         if raw is None:
             self._pending = None
             return

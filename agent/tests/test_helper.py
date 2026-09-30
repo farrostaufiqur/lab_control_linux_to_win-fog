@@ -38,13 +38,20 @@ class World:
         self.applied, self.launched, self.downloads = [], [], 0
         self.loaded = True
         self.fail_manifest = False
+        self.rename = None
+        self.rename_error = None
+        self.renamed, self.reports, self.hostname = [], [], "PC-01"
         self.clock = Clock()
 
     def ports(self):
         def fetch():
             if self.fail_manifest:
                 raise OSError("offline")
-            return {"release": self.manifest}
+            return {"release": self.manifest, "rename": self.rename}
+
+        def rename_computer(name):
+            self.renamed.append(name)
+            return self.rename_error
 
         def download(dest):
             self.downloads += 1
@@ -54,7 +61,9 @@ class World:
             self.applied.append((sid, locked, taskmgr))
             return None if not self.loaded else []
         return helper.Ports(own_sha=OLD_SHA, fetch_manifest=fetch, download=download,
-                            apply_policy=apply, launch_update=self.launched.append)
+                            apply_policy=apply, launch_update=self.launched.append, hostname=self.hostname,
+                            rename_computer=rename_computer,
+                            report_rename=lambda name, ok, error: self.reports.append((name, ok, error)))
 
     def helper(self):
         return helper.Helper(self.cfg, self.install, self.ports(), clock=self.clock, rand=lambda a, b: 0)
@@ -201,3 +210,47 @@ def test_failed_update_marker_blacklists_release(tmp_path):
     w.manifest = release(data=b"MZ" + b"q" * 50, version="1.4.0"); w.exe = b"MZ" + b"q" * 50
     w.clock.now += 100; h2.tick()
     assert h2.finished
+
+
+# --- ganti nama komputer -----------------------------------------------------------
+def test_rename_applied_and_reported_once(tmp_path):
+    w = World(tmp_path, key="")     # tidak butuh kunci pembaruan
+    w.rename = {"name": "lab-01"}
+    h = w.helper(); h.tick()
+    assert w.renamed == ["LAB-01"] and w.reports == [("LAB-01", True, "")]
+    w.clock.now += helper.UPDATE_CHECK_SECONDS + 1
+    h.tick()                        # server belum sempat mencatat: tidak mengganti lagi, hanya lapor ulang
+    assert w.renamed == ["LAB-01"] and len(w.reports) == 2
+
+
+def test_rename_failure_reported(tmp_path):
+    w = World(tmp_path)
+    w.rename, w.rename_error = {"name": "LAB-02"}, "Access is denied"
+    h = w.helper(); h.tick()
+    assert w.reports == [("LAB-02", False, "Access is denied")]
+    w.rename = None
+    w.clock.now += helper.UPDATE_CHECK_SECONDS + 1
+    h.tick()
+    assert len(w.reports) == 1
+
+
+def test_rename_to_current_name_only_reports(tmp_path):
+    w = World(tmp_path)
+    w.rename = {"name": "pc-01"}
+    h = w.helper(); h.tick()
+    assert w.renamed == [] and w.reports == [("PC-01", True, "")]
+
+
+@pytest.mark.parametrize("bad", ["", "a b", "-x", "12345", "a" * 16, "x;calc", 7, None])
+def test_rename_invalid_names_ignored(tmp_path, bad):
+    w = World(tmp_path, key="")
+    w.rename = {"name": bad}
+    h = w.helper(); h.tick()
+    assert w.renamed == [] and w.reports == []
+
+
+def test_rename_and_update_in_same_reply(tmp_path):
+    w = World(tmp_path, manifest=release())
+    w.rename = {"name": "LAB-03"}
+    h = w.helper(); h.tick()
+    assert w.renamed == ["LAB-03"] and h.finished

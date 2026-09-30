@@ -112,6 +112,12 @@ Cara kerja: pembantu bertanya ke server tiap 60 detik; bila SHA-256 exe rilis be
 
 Pembaruan hanya berjalan lewat LAN (`/api/agent/*` tidak dibuka lewat tunnel). PC yang masih memakai agent lama (sebelum v1.2.0) harus dipasang ulang sekali dengan `install.ps1`; setelah itu pembaruan otomatis.
 
+## Nama PC
+- Tombol **Nama**: nama tampilan di dashboard saja (tidak mengubah Windows).
+- Tombol **Nama Windows**: mengganti nama komputer Windows sungguhan. Server menawarkan permintaan itu ke pembantu SYSTEM di PC (butuh agent v1.3.0 ke atas dengan pembantu berjalan), yang memanggil `SetComputerNameExW`. Nama baru berlaku **setelah PC restart** (bisa dipilih restart otomatis). Aturan nama: maks 15 huruf/angka/tanda `-`, tidak boleh angka semua, disimpan huruf besar.
+- Setelah restart PC melapor dengan nama baru dan tampil sebagai entri baru; nama tampilan, override kunci, dan log entri lama dipindahkan otomatis. Bila gagal, dashboard menampilkan galatnya dan permintaan tidak diulang otomatis (kirim ulang dari tombol yang sama).
+- PC yang tergabung domain (AD) tidak dianjurkan: nama lokal berbeda dari nama di domain.
+
 ## Pemulihan darurat (server rusak, PC terkunci)
 Bila server tidak bisa dihidupkan dan PC lab tetap terkunci, agent bisa dicopot dengan mencolok drive (flashdisk, HDD eksternal) yang berisi **file dengan nama rahasia** di folder paling atas (tingkat pertama).
 

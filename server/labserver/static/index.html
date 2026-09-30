@@ -151,6 +151,15 @@ async function api(path, method = "GET", body) {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   return res.json();
 }
+function renameLabel(pc) {
+  const r = pc.rename;
+  if (!r) return "";
+  const text = r.state === "pending" ? `Nama Windows → ${r.name}: menunggu PC`
+    : r.state === "applied" ? `Nama Windows → ${r.name}: menunggu restart PC`
+    : `Ganti nama Windows ke ${r.name} gagal: ${r.error || "tidak diketahui"}`;
+  return `<div class="muted">${esc(text)}</div>`;
+}
+
 async function act(path, method, body) {
   try { await api(path, method, body); $("#err").textContent = ""; refresh(); }
   catch (e) { $("#err").textContent = e.message; }
@@ -191,7 +200,7 @@ function render() {
     <tr>
       <td><span class="dot ${pc.online ? "on" : ""}"></span><b>${esc(pc.name)}</b>
           <div class="muted">${pc.name !== pc.id ? esc(pc.id) + " · " : ""}${esc(pc.ip)}${pc.online ? "" : " · terakhir " + clock(pc.last_seen)}</div>
-          <div class="muted">${buildLabel(pc)}</div></td>
+          <div class="muted">${buildLabel(pc)}</div>${renameLabel(pc)}</td>
       <td>${pc.online ? esc(pc.user) : ""}</td>
       <td class="trunc" title="${esc(pc.title)}">${pc.online ? esc(pc.app) : ""}<div class="muted trunc">${pc.online ? esc(pc.title) : ""}</div></td>
       <td>${pc.online ? dur(pc.idle) : ""}</td>
@@ -203,6 +212,7 @@ function render() {
         ${pc.override ? `<button data-clear="${esc(pc.id)}">Ikut jadwal</button>` : ""}
         <button data-msg="${esc(pc.id)}">Pesan</button>
         <button data-rename="${esc(pc.id)}" data-name="${esc(pc.name === pc.id ? "" : pc.name)}">Nama</button>
+        <button data-wname="${esc(pc.id)}" data-current="${esc(pc.rename ? pc.rename.name : "")}">Nama Windows</button>
         <button data-cmd="restart" data-pc="${esc(pc.id)}">Restart</button>
         <button class="danger" data-cmd="shutdown" data-pc="${esc(pc.id)}">Matikan</button>
       </div></td>
@@ -264,6 +274,14 @@ document.addEventListener("click", (e) => {
     const name = prompt(`Nama tampilan untuk ${t.dataset.rename} (kosongkan untuk memakai nama asli):`, t.dataset.name);
     if (name !== null) return act(`/api/pcs/${encodeURIComponent(t.dataset.rename)}/name`, "PUT", { name });
     return;
+  }
+  if (t.dataset.wname) {
+    const id = encodeURIComponent(t.dataset.wname);
+    const name = prompt(`Nama Windows baru untuk ${t.dataset.wname} (maks 15 huruf/angka/tanda -; berlaku setelah restart; PC tampil sebagai entri baru tetapi nama tampilan, pengaturan, dan log ikut pindah). Kosongkan untuk membatalkan permintaan:`, t.dataset.current);
+    if (name === null) return;
+    if (!name.trim()) return act(`/api/pcs/${id}/windows-name`, "DELETE");
+    const restart = confirm("Restart PC otomatis setelah nama diganti?\n\nOK = restart otomatis, Batal = nama berlaku pada restart berikutnya.");
+    return act(`/api/pcs/${id}/windows-name`, "PUT", { name: name.trim(), restart });
   }
   if (t.dataset.clear) return act(`/api/pcs/${encodeURIComponent(t.dataset.clear)}/clear`, "POST");
   if (t.dataset.cmd) {

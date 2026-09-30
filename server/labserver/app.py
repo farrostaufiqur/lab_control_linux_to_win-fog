@@ -21,6 +21,7 @@ MAX_EVENTS_PER_POLL = 200
 MAX_OVERRIDE_MINUTES = 60 * 24 * 7
 MAX_NOTICE_CHARS = 300
 MAX_NAME_CHARS = 40
+HOSTNAME_RE = re.compile(r"^(?!\d+$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?$")  # aturan nama NetBIOS 15 karakter
 ALL_ZONES = frozenset(available_timezones())
 
 
@@ -133,8 +134,9 @@ def create_app(cfg: Config) -> Flask:
             abort(400, "minutes tidak valid")
         return {"mode": mode, "until": time.time() + minutes * 60}
 
-    def pc_view(row, now):
+    def pc_view(row, now, renames=None):
         state = state_for(row, now)
+        req = (renames if renames is not None else store.list_renames()).get(row["id"])
         return {
             "id": row["id"],
             "name": row["alias"] or row["id"],
@@ -151,6 +153,7 @@ def create_app(cfg: Config) -> Flask:
             "agent_locked": bool(row["locked"]),
             "version": row["version"],
             "exe_sha": row["exe_sha"],
+            "rename": {"name": req["new"], "state": req["state"], "error": req["error"]} if req else None,
             "locked": state["locked"],
             "source": state["source"],
             "changes_in": state["changes_in"],
@@ -201,6 +204,9 @@ def create_app(cfg: Config) -> Flask:
         before = store.record_report(host, report, events, now)
         if before is None:
             store.add_event(host, "info", "PC baru terdaftar", now)
+            old = store.migrate_renamed(host)
+            if old:
+                store.add_event(host, "info", f"Nama Windows diganti dari {old}", now)
         elif now - before["last_seen"] > cfg.online_timeout * 2:
             gap = int(now - before["last_seen"])
             store.add_event(host, "info", f"Kembali terhubung setelah terputus {gap} detik", now)
@@ -241,7 +247,29 @@ def create_app(cfg: Config) -> Flask:
         if isinstance(host, str) and HOST_RE.match(host) and isinstance(sha, str) and release.SHA_RE.match(sha):
             store.set_build(host, _text(data.get("version"), 32), sha)
         rel = current_release()
-        return jsonify({"release": release.manifest(rel) if rel else None})
+        req = store.list_renames().get(host) if isinstance(host, str) else None
+        rename = {"name": req["new"]} if req and req["state"] == "pending" else None
+        return jsonify({"release": release.manifest(rel) if rel else None, "rename": rename})
+
+    @app.post("/api/agent/rename-result")
+    def agent_rename_result():
+        agent_only()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            abort(400)
+        host, name = data.get("host", ""), data.get("name", "")
+        if not (isinstance(host, str) and HOST_RE.match(host) and isinstance(name, str) and HOSTNAME_RE.match(name)):
+            abort(400)
+        req = store.rename_result(host, name.upper(), bool(data.get("ok")), _text(data.get("error"), 200) or "")
+        if req is None:
+            return jsonify(ok=True)
+        if data.get("ok"):
+            store.add_event(host, "info", f"Nama Windows diganti menjadi {req['new']}; berlaku setelah restart")
+            if req["restart"]:
+                store.queue_command(host, "restart", time.time())
+        else:
+            store.add_event(host, "info", f"Gagal mengganti nama Windows: {_text(data.get('error'), 200)}")
+        return jsonify(ok=True)
 
     @app.get("/api/agent/release/file")
     def agent_release_file():
@@ -315,6 +343,7 @@ def create_app(cfg: Config) -> Flask:
         admin_only()
         now = time.time()
         sched = schedule()
+        renames = store.list_renames()
         return jsonify({
             "now": now,
             "lab_name": cfg.lab_name,
@@ -322,7 +351,7 @@ def create_app(cfg: Config) -> Flask:
             "global_override": global_override(),
             "schedule_enabled": sched["enabled"],
             "release": current_release(),
-            "pcs": [pc_view(row, now) for row in store.list_pcs()],
+            "pcs": [pc_view(row, now, renames) for row in store.list_pcs()],
         })
 
     def pc_or_404(pc_id):
@@ -341,6 +370,32 @@ def create_app(cfg: Config) -> Flask:
         store.set_alias(pc_id, name or None)
         store.add_event(pc_id, "info", f"Admin mengganti nama tampilan menjadi {name}" if name else "Admin menghapus nama tampilan")
         return jsonify(ok=True, name=name or pc_id)
+
+    @app.put("/api/pcs/<pc_id>/windows-name")
+    def api_pc_windows_name(pc_id):
+        admin_only()
+        pc_or_404(pc_id)
+        body = request.get_json(silent=True) or {}
+        name = str(body.get("name") or "").strip()
+        if not HOSTNAME_RE.match(name):
+            abort(400, "nama Windows: 1-15 huruf/angka/tanda hubung, tidak boleh diawali atau diakhiri tanda hubung, tidak boleh hanya angka")
+        name = name.upper()
+        taken = {row["id"].upper() for row in store.list_pcs() if row["id"] != pc_id}
+        taken |= {r["new"] for old, r in store.list_renames().items() if old != pc_id}
+        if name in taken:
+            abort(409, f"nama {name} sudah dipakai PC lain")
+        if name == pc_id.upper():
+            abort(400, "nama baru sama dengan nama sekarang")
+        store.request_rename(pc_id, name, bool(body.get("restart")), time.time())
+        store.add_event(pc_id, "info", f"Admin meminta nama Windows diganti menjadi {name}" + (" (lalu restart)" if body.get("restart") else ""))
+        return jsonify(ok=True, name=name)
+
+    @app.delete("/api/pcs/<pc_id>/windows-name")
+    def api_pc_windows_name_cancel(pc_id):
+        admin_only()
+        pc_or_404(pc_id)
+        store.cancel_rename(pc_id)
+        return jsonify(ok=True)
 
     @app.post("/api/pcs/<pc_id>/lock")
     def api_pc_lock(pc_id):

@@ -43,8 +43,13 @@ def run_helper(cfg: config.AgentConfig, config_path: Path) -> None:
         with urllib.request.urlopen(request, timeout=120) as response, open(dest, "wb") as out:
             shutil.copyfileobj(response, out)
 
+    def report_rename(name: str, ok: bool, error: str) -> None:
+        http_post_json(cfg.server_url.rstrip("/") + "/api/agent/rename-result",
+                       {"host": host, "name": name, "ok": ok, "error": error}, cfg.token, timeout=10)
+
     ports = helper.Ports(own_sha=own_sha, fetch_manifest=fetch_manifest, download=download,
-                         apply_policy=winapi.apply_user_policies, launch_update=winapi.launch_update)
+                         apply_policy=winapi.apply_user_policies, launch_update=winapi.launch_update,
+                         hostname=host, rename_computer=winapi.rename_computer, report_rename=report_rename)
     helper.Helper(cfg, config_path.parent, ports).run_forever(threading.Event())
 
 
