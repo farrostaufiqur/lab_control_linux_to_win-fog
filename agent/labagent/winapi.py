@@ -2,9 +2,13 @@
 import ctypes
 import os
 import subprocess
+import sys
 import threading
+import time
 import winreg
 from ctypes import wintypes
+
+from . import helper
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -97,12 +101,41 @@ class WindowsPlatform:
         kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
         return int(status.dwMemoryLoad)
 
+    def exe_sha256(self) -> str:
+        return own_exe_sha256()
+
     def power(self, action: str, force: bool) -> None:
         flag = "/s" if action == "shutdown" else "/r"
         command = ["shutdown", flag, "/t", "3", "/c", "Lab Control"]
         if force:
             command.append("/f")
         subprocess.Popen(command, creationflags=CREATE_NO_WINDOW)
+
+
+_exe_sha: str | None = None
+
+
+def own_exe_sha256() -> str:
+    """SHA-256 exe yang sedang berjalan; kosong bila bukan hasil build (mis. dijalankan dari sumber)."""
+    global _exe_sha
+    if _exe_sha is None:
+        from .updater import file_sha256
+        try:
+            _exe_sha = file_sha256(sys.executable) if getattr(sys, "frozen", False) else ""
+        except OSError:
+            _exe_sha = ""
+    return _exe_sha
+
+
+def current_sid() -> str:
+    """SID user yang menjalankan proses ini (kosong bila gagal)."""
+    try:
+        out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], creationflags=CREATE_NO_WINDOW,
+                             capture_output=True, text=True, timeout=10).stdout
+        sid = out.strip().strip('"').split('","')[-1].strip('"')
+        return sid if helper.SID_RE.match(sid) else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def acquire_single_instance(name: str = "Local\\LabAgentSingleton"):
@@ -161,13 +194,13 @@ class KeyboardBlocker:
             user32.DispatchMessageW(ctypes.byref(message))
 
 
-# --- registry policies (current user) --------------------------------------
+# --- registry policies ------------------------------------------------------
 _SYSTEM = r"Software\Microsoft\Windows\CurrentVersion\Policies\System"
 _EXPLORER = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
 
 
-def _set_policy(subkey: str, name: str, enabled: bool) -> None:
-    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, subkey, 0, winreg.KEY_SET_VALUE) as key:
+def _set_policy(root, subkey: str, name: str, enabled: bool) -> None:
+    with winreg.CreateKeyEx(root, subkey, 0, winreg.KEY_SET_VALUE) as key:
         if enabled:
             winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, 1)
         else:
@@ -177,10 +210,43 @@ def _set_policy(subkey: str, name: str, enabled: bool) -> None:
                 pass
 
 
-class LockdownPolicies:
-    """Neutralises the Ctrl+Alt+Del screen while the overlay is up."""
+def _write_policies(root, prefix: str, locked: bool, block_taskmgr: bool) -> list[str]:
+    """Empat nilai yang dikelola agent; tiap penulisan berdiri sendiri. Mengembalikan yang gagal."""
+    errors: list[str] = []
+    for subkey, name, enabled in (
+            (_SYSTEM, "DisableLockWorkstation", locked), (_SYSTEM, "DisableChangePassword", locked),
+            (_EXPLORER, "NoLogoff", locked), (_SYSTEM, "DisableTaskMgr", locked or block_taskmgr)):
+        try:
+            _set_policy(root, prefix + subkey, name, enabled)
+        except OSError as exc:
+            errors.append(f"{name} ({exc})")
+    return errors
 
-    def __init__(self):
+
+def apply_user_policies(sid: str, locked: bool, block_taskmgr: bool) -> list[str] | None:
+    """Dipanggil helper (SYSTEM): tulis ke HKEY_USERS\\<sid>. None bila profil user belum dimuat."""
+    if not helper.SID_RE.match(sid):
+        return [f"SID tidak valid: {sid!r}"]
+    try:
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_USERS, sid))
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return [f"profil {sid}: {exc}"]
+    return _write_policies(winreg.HKEY_USERS, sid + "\\", locked, block_taskmgr)
+
+
+class LockdownPolicies:
+    """Neutralises the Ctrl+Alt+Del screen while the overlay is up.
+
+    Kunci HKCU\\...\\Policies pada banyak PC dimiliki SYSTEM (user biasa hanya bisa membaca), jadi
+    agent menulis permintaan ke `policy.json` dan helper SYSTEM yang menulis registry. Bila helper
+    tidak berjalan, agent mencoba menulis langsung sebagai cadangan.
+    """
+
+    def __init__(self, state_dir: str):
+        self.state_dir = state_dir
+        self._sid = current_sid()
         self._state: tuple[bool, bool] | None = None
 
     def apply(self, locked: bool, block_taskmgr: bool) -> list[str]:
@@ -188,23 +254,27 @@ class LockdownPolicies:
         state = (locked, locked or block_taskmgr)
         if state == self._state:
             return []
-        previous = self._state or (None, None)
-        errors: list[str] = []
-
-        def write(subkey: str, name: str, enabled: bool) -> None:
-            try:
-                _set_policy(subkey, name, enabled)
-            except OSError as exc:
-                errors.append(f"{name} ({exc})")
-
-        if state[0] != previous[0]:
-            write(_SYSTEM, "DisableLockWorkstation", locked)
-            write(_SYSTEM, "DisableChangePassword", locked)
-            write(_EXPLORER, "NoLogoff", locked)
-        if state[1] != previous[1]:
-            write(_SYSTEM, "DisableTaskMgr", state[1])
         self._state = state  # tidak diulang tiap tick; dicoba lagi saat status kunci berubah
-        return errors
+        errors: list[str] = []
+        if self._sid:
+            try:
+                helper.write_policy_request(self.state_dir, self._sid, locked, block_taskmgr)
+            except OSError as exc:
+                errors.append(f"permintaan ke helper ({exc})")
+        else:
+            errors.append("SID user tidak diketahui")
+        if helper.helper_alive(self.state_dir, time.time()):
+            return errors
+        return errors + _write_policies(winreg.HKEY_CURRENT_USER, "", locked, block_taskmgr)
+
+
+def launch_update(script: str) -> None:
+    """Jalankan skrip pembaruan lewat tugas SYSTEM sekali-jalan, supaya tidak ikut mati bersama helper."""
+    def run(command):
+        subprocess.run(command, creationflags=CREATE_NO_WINDOW, capture_output=True)
+
+    run('schtasks /Create /TN LabAgentUpdate /TR "\\"' + script + '\\"" /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F')
+    run("schtasks /Run /TN LabAgentUpdate")
 
 
 # --- pemulihan darurat: cek drive & copot agent (dipakai killswitch.py) --------
@@ -250,7 +320,7 @@ def remove_agent(install_dir: str, state_dir: str) -> None:
         subprocess.run(command, creationflags=CREATE_NO_WINDOW, capture_output=True)
 
     # tugas dihapus dulu supaya watchdog tidak menjalankan agent lagi
-    for task in ("LabAgent", "LabAgentKillSwitch"):
+    for task in ("LabAgent", "LabAgentKillSwitch", "LabAgentHelper", "LabAgentUpdate"):
         run("schtasks", "/Delete", "/TN", task, "/F")
     # kecualikan diri sendiri dan proses induknya (bootloader PyInstaller onefile)
     run("taskkill", "/F", "/IM", "labagent.exe", "/FI", f"PID ne {os.getpid()}", "/FI", f"PID ne {os.getppid()}")

@@ -200,3 +200,13 @@ def test_status_reports_placeholder_while_locked(env):
     agent.poll_once()
     agent.poll_once()
     assert server.bodies[-1]["app"] == "(layar terkunci)" and server.bodies[-1]["locked"] is True
+
+
+def test_poll_reports_exe_sha_when_platform_knows_it():
+    platform = FakePlatform()
+    platform.exe_sha256 = lambda: "ab" * 32
+    sent = []
+    agent = Agent(AgentConfig(server_url="http://x", token="t", state_dir="/nonexistent-x"), platform,
+                  post=lambda url, body, token: sent.append(body) or {"locked": False}, clock=Clock())
+    assert agent.poll_once()
+    assert sent[0]["exe_sha"] == "ab" * 32

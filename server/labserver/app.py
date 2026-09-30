@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from zoneinfo import ZoneInfo, available_timezones
 
 from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
-from . import policy
+from . import policy, release
 from .config import Config
 from .db import Store
 
@@ -147,6 +148,7 @@ def create_app(cfg: Config) -> Flask:
             "mem": row["mem"],
             "agent_locked": bool(row["locked"]),
             "version": row["version"],
+            "exe_sha": row["exe_sha"],
             "locked": state["locked"],
             "source": state["source"],
             "changes_in": state["changes_in"],
@@ -179,6 +181,7 @@ def create_app(cfg: Config) -> Flask:
             "mem": _int(data.get("mem"), 0, 100),
             "locked": 1 if data.get("locked") else 0,
             "version": _text(data.get("version"), 32),
+            "exe_sha": _text(data.get("exe_sha"), 64) or None,
         }
         events = []
         for raw in (data.get("events") or [])[:MAX_EVENTS_PER_POLL]:
@@ -217,7 +220,89 @@ def create_app(cfg: Config) -> Flask:
             "lab_name": cfg.lab_name,
         })
 
+    # rilis agent ---------------------------------------------------------
+    releases_dir = Path(cfg.db_path).parent / "releases"
+
+    def current_release():
+        rel = store.get_setting("agent_release", None)
+        if not rel or not (releases_dir / f"labagent-{rel['sha256']}.exe").is_file():
+            return None
+        return rel
+
+    @app.post("/api/agent/release")
+    def agent_release():
+        agent_only()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            abort(400)
+        host, sha = data.get("host", ""), data.get("sha", "")
+        if isinstance(host, str) and HOST_RE.match(host) and isinstance(sha, str) and release.SHA_RE.match(sha):
+            store.set_build(host, _text(data.get("version"), 32), sha)
+        rel = current_release()
+        return jsonify({"release": release.manifest(rel) if rel else None})
+
+    @app.get("/api/agent/release/file")
+    def agent_release_file():
+        agent_only()
+        rel = current_release()
+        if rel is None:
+            abort(404)
+        return send_from_directory(releases_dir, f"labagent-{rel['sha256']}.exe", mimetype="application/octet-stream")
+
     # admin API -----------------------------------------------------------
+    @app.get("/api/release")
+    def api_release_get():
+        admin_only()
+        pcs = store.list_pcs()
+        rel = current_release()
+        return jsonify({
+            "release": rel,
+            "signing_enabled": bool(cfg.update_public_key),
+            "pcs_total": len(pcs),
+            "pcs_current": sum(1 for row in pcs if rel and row["exe_sha"] == rel["sha256"]),
+        })
+
+    @app.post("/api/release")
+    def api_release_post():
+        admin_only()
+        if not cfg.update_public_key:
+            abort(409, "update_public_key belum diatur di config.toml server")
+        version = request.args.get("version", "")
+        signature = release.decode_signature(request.args.get("signature", ""))
+        if not release.VERSION_RE.match(version) or signature is None:
+            abort(400, "version atau signature tidak valid")
+        request.max_content_length = release.MAX_RELEASE_BYTES
+        releases_dir.mkdir(parents=True, exist_ok=True)
+        tmp = releases_dir / f"upload-{secrets.token_hex(6)}.tmp"
+        try:
+            try:
+                sha, size = release.sha_of_stream(request.stream, tmp, release.MAX_RELEASE_BYTES)
+            except ValueError:
+                abort(413, "berkas terlalu besar")
+            with open(tmp, "rb") as f:
+                is_exe = f.read(2) == b"MZ"
+            if not size or not is_exe:
+                abort(400, "berkas bukan exe Windows")
+            if not release.verify(cfg.update_public_key, version, sha, signature):
+                abort(400, "tanda tangan tidak cocok dengan berkas, versi, atau kunci publik server")
+            release.store_file(releases_dir, sha, tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+        info = {"version": version, "sha256": sha, "size": size,
+                "signature": base64.b64encode(signature).decode(), "uploaded": time.time()}
+        store.set_setting("agent_release", info)
+        release.prune_files(releases_dir, sha)
+        store.add_event("*", "info", f"Admin mengunggah rilis agent {version} ({sha[:12]})")
+        return jsonify(ok=True, release=info)
+
+    @app.delete("/api/release")
+    def api_release_delete():
+        admin_only()
+        store.set_setting("agent_release", None)
+        release.prune_files(releases_dir, None)
+        store.add_event("*", "info", "Admin menghentikan distribusi rilis agent")
+        return jsonify(ok=True)
+
     @app.get("/")
     def dashboard():
         admin_only()
@@ -234,6 +319,7 @@ def create_app(cfg: Config) -> Flask:
             "timezone": timezone_name(),
             "global_override": global_override(),
             "schedule_enabled": sched["enabled"],
+            "release": current_release(),
             "pcs": [pc_view(row, now) for row in store.list_pcs()],
         })
 
@@ -407,6 +493,8 @@ def create_app(cfg: Config) -> Flask:
     @app.errorhandler(400)
     @app.errorhandler(403)
     @app.errorhandler(404)
+    @app.errorhandler(409)
+    @app.errorhandler(413)
     def plain_error(err):
         return jsonify(error=getattr(err, "description", "error")), err.code
 

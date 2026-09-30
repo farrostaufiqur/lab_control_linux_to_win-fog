@@ -1,10 +1,12 @@
 import argparse
+import shutil
 import sys
 import threading
+import urllib.request
 from pathlib import Path
 
-from . import config
-from .core import Agent
+from . import VERSION, config, helper
+from .core import Agent, http_post_json
 
 
 def watch_usb(cfg: config.AgentConfig, config_path: Path) -> None:
@@ -22,10 +24,35 @@ def watch_usb(cfg: config.AgentConfig, config_path: Path) -> None:
         watcher, lambda _root: winapi.remove_agent(install_dir, cfg.state_dir), threading.Event())
 
 
+def run_helper(cfg: config.AgentConfig, config_path: Path) -> None:
+    """Proses SYSTEM: menulis kebijakan registry atas permintaan agent dan memasang rilis baru."""
+    from . import winapi
+
+    guard = winapi.acquire_single_instance("Global\\LabAgentHelperSingleton")
+    if guard is None:
+        return
+    base = cfg.server_url.rstrip("/") + "/api/agent/release"
+    own_sha = winapi.own_exe_sha256()
+    host = winapi.WindowsPlatform().hostname()
+
+    def fetch_manifest():
+        return http_post_json(base, {"host": host, "sha": own_sha, "version": VERSION}, cfg.token, timeout=10)
+
+    def download(dest: str) -> None:
+        request = urllib.request.Request(base + "/file", headers={"X-Agent-Token": cfg.token})
+        with urllib.request.urlopen(request, timeout=120) as response, open(dest, "wb") as out:
+            shutil.copyfileobj(response, out)
+
+    ports = helper.Ports(own_sha=own_sha, fetch_manifest=fetch_manifest, download=download,
+                         apply_policy=winapi.apply_user_policies, launch_update=winapi.launch_update)
+    helper.Helper(cfg, config_path.parent, ports).run_forever(threading.Event())
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--watch-usb", action="store_true", help="mode pemulihan darurat (dijalankan sebagai SYSTEM)")
+    parser.add_argument("--helper", action="store_true", help="pembantu SYSTEM: kebijakan registry dan pembaruan otomatis")
     args = parser.parse_args()
 
     if sys.platform != "win32":
@@ -34,6 +61,11 @@ def main():
     if args.watch_usb:
         path = args.config or config.default_path()
         watch_usb(config.load(path), path)
+        return
+
+    if args.helper:
+        path = args.config or config.default_path()
+        run_helper(config.load(path), path)
         return
 
     from . import winapi

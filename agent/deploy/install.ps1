@@ -9,7 +9,8 @@ param(
     [string]$Exe = "$PSScriptRoot\labagent.exe",
     [string[]]$ExemptUsers = @("administrator", "admin", "labadmin"),
     [ValidateSet("lock", "unlock")][string]$OfflineBootPolicy = "lock",
-    [string]$KillFileName = ""    # opsional: nama file rahasia untuk pemulihan darurat (lihat README)
+    [string]$KillFileName = "",   # opsional: nama file rahasia untuk pemulihan darurat (lihat README)
+    [string]$UpdatePublicKey = "" # opsional: kunci publik rilis (64 hex) agar agent memperbarui diri dari server
 )
 $ErrorActionPreference = "Stop"
 if (-not (Test-Path $Exe)) { throw "labagent.exe tidak ditemukan di $Exe (jalankan build.ps1 dulu)" }
@@ -27,6 +28,10 @@ $config = [ordered]@{
     offline_boot_policy = $OfflineBootPolicy
     exempt_users        = $ExemptUsers
     state_dir           = $data
+}
+if ($UpdatePublicKey) {
+    if ($UpdatePublicKey -notmatch '^[0-9a-fA-F]{64}$') { throw "UpdatePublicKey harus 64 karakter heksadesimal (dari: python tools/release.py keygen)" }
+    $config["update_public_key"] = $UpdatePublicKey.ToLowerInvariant()
 }
 if ($KillFileName) {
     # hanya hash-nya yang disimpan; sama dengan killswitch.name_hash (trim + huruf kecil)
@@ -59,6 +64,17 @@ $settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -Executio
              -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName "LabAgent" -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force | Out-Null
+
+# Pembantu SYSTEM: menulis kebijakan registry Ctrl+Alt+Del (user biasa tidak bisa) dan memasang rilis baru agent
+$helperAction    = New-ScheduledTaskAction -Execute "$dir\labagent.exe" -Argument "--helper"
+$helperTrigger   = New-ScheduledTaskTrigger -AtStartup
+$helperPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$helperSettings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 4 `
+                   -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName "LabAgentHelper" -Action $helperAction -Trigger $helperTrigger `
+    -Principal $helperPrincipal -Settings $helperSettings -Force | Out-Null
+Start-ScheduledTask -TaskName "LabAgentHelper"
+if ($UpdatePublicKey) { Write-Host "Pembaruan otomatis aktif." } else { Write-Host "Pembaruan otomatis mati (tanpa -UpdatePublicKey)." }
 
 # Pemulihan darurat: proses SYSTEM yang membaca nama file tingkat pertama tiap drive yang terpasang
 if ($KillFileName) {

@@ -82,6 +82,22 @@
   </section>
 
   <section>
+    <h2>Pembaruan agent</h2>
+    <p class="muted" id="rel-status">Memuat…</p>
+    <p class="muted">Bangun <code>labagent.exe</code>, tanda tangani di komputer admin
+      (<code>python tools/release.py sign labagent.exe --key rilis.key --version X.Y.Z</code>), lalu pilih
+      kedua berkasnya (<code>labagent.exe</code> dan <code>labagent.exe.release.json</code>). Semua PC memasang
+      rilis ini sendiri; PC yang sedang mati memasangnya saat menyala.</p>
+    <div class="actions">
+      <label>exe <input type="file" id="rel-exe" accept=".exe"></label>
+      <label>tanda tangan <input type="file" id="rel-json" accept=".json"></label>
+      <button class="primary" id="rel-upload">Unggah rilis</button>
+      <button class="danger" id="rel-stop">Hentikan distribusi</button>
+      <span class="muted" id="rel-msg"></span>
+    </div>
+  </section>
+
+  <section>
     <h2>Jadwal sesi</h2>
     <p class="muted">Komputer terbuka hanya pada jam di bawah. Di luar itu layar dikunci otomatis.
       Tiap baris bisa berulang setiap hari, setiap pekan pada hari yang dipilih, atau hanya pada satu tanggal.</p>
@@ -155,6 +171,13 @@ function lockCell(pc) {
   return `${badge}<div class="muted">${src} · ${next}</div>`;
 }
 
+function buildLabel(pc) {
+  if (!pc.version) return "";
+  const rel = data.release;
+  const stale = rel && pc.exe_sha !== rel.sha256;
+  return `agent v${esc(pc.version)}` + (stale ? ` · <b>menunggu pembaruan ke v${esc(rel.version)}</b>` : "");
+}
+
 function render() {
   const { pcs } = data;
   $("#title").textContent = data.lab_name;
@@ -167,7 +190,8 @@ function render() {
   $("#pcs").innerHTML = pcs.length ? pcs.map((pc) => `
     <tr>
       <td><span class="dot ${pc.online ? "on" : ""}"></span><b>${esc(pc.id)}</b>
-          <div class="muted">${esc(pc.ip)}${pc.online ? "" : " · terakhir " + clock(pc.last_seen)}</div></td>
+          <div class="muted">${esc(pc.ip)}${pc.online ? "" : " · terakhir " + clock(pc.last_seen)}</div>
+          <div class="muted">${buildLabel(pc)}</div></td>
       <td>${pc.online ? esc(pc.user) : ""}</td>
       <td class="trunc" title="${esc(pc.title)}">${pc.online ? esc(pc.app) : ""}<div class="muted trunc">${pc.online ? esc(pc.title) : ""}</div></td>
       <td>${pc.online ? dur(pc.idle) : ""}</td>
@@ -186,8 +210,20 @@ function render() {
   sel.innerHTML = `<option value="">Semua PC</option>` + pcs.map((p) => `<option ${p.id === keep ? "selected" : ""}>${esc(p.id)}</option>`).join("");
 }
 
+async function refreshRelease() {
+  try {
+    const r = await api("/api/release");
+    $("#rel-status").textContent = !r.signing_enabled
+      ? "Unggah dimatikan: isi update_public_key di config.toml server, lalu restart server."
+      : r.release
+        ? `Rilis aktif: v${r.release.version} (${(r.release.size / 1048576).toFixed(1)} MB, diunggah ${new Date(r.release.uploaded * 1000).toLocaleString("id-ID")}). ` +
+          `${r.pcs_current} dari ${r.pcs_total} PC sudah memakainya.`
+        : "Belum ada rilis. Agent tidak diperbarui.";
+  } catch (e) { /* refresh() melaporkan masalah koneksi */ }
+}
+
 async function refresh() {
-  try { data = await api("/api/pcs"); render(); $("#err").textContent = ""; }
+  try { data = await api("/api/pcs"); render(); refreshRelease(); $("#err").textContent = ""; }
   catch (e) { $("#err").textContent = "Server tidak terjangkau: " + e.message; }
 }
 
@@ -276,6 +312,28 @@ $("#restart-server").onclick = async () => {
       try { await api("/api/pcs"); clearInterval(wait); $("#err").textContent = ""; refresh(); } catch (e) {}
     }, 2000);
   } catch (e) { $("#err").textContent = e.message; }
+};
+$("#rel-upload").onclick = async () => {
+  const msg = $("#rel-msg"), exe = $("#rel-exe").files[0], sig = $("#rel-json").files[0];
+  if (!exe || !sig) { msg.textContent = "Pilih exe dan berkas .release.json."; return; }
+  let manifest;
+  try { manifest = JSON.parse(await sig.text()); } catch (e) { msg.textContent = "Berkas tanda tangan bukan JSON."; return; }
+  if (!confirm(`Unggah v${manifest.version}? Semua PC akan memperbarui agent secara otomatis.`)) return;
+  msg.textContent = "Mengunggah…";
+  try {
+    const q = new URLSearchParams({ version: manifest.version, signature: manifest.signature });
+    const res = await fetch("/api/release?" + q, {
+      method: "POST", body: exe,
+      headers: { "Content-Type": "application/octet-stream", "X-Lab-Admin": "1" },
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    msg.textContent = "Rilis aktif ✓"; $("#rel-exe").value = ""; $("#rel-json").value = ""; refresh();
+  } catch (e) { msg.textContent = "Gagal: " + e.message; }
+};
+$("#rel-stop").onclick = async () => {
+  if (!confirm("Hentikan distribusi rilis? PC yang belum memperbarui tidak akan memperbarui.")) return;
+  try { await api("/api/release", "DELETE"); $("#rel-msg").textContent = ""; refresh(); }
+  catch (e) { $("#rel-msg").textContent = "Gagal: " + e.message; }
 };
 $("#tz").onchange = async () => {
   try { await api("/api/timezone", "PUT", { timezone: $("#tz").value }); $("#err").textContent = ""; refresh(); }

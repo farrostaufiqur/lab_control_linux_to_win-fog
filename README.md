@@ -90,6 +90,28 @@ Hapus dengan `uninstall.ps1`.
 - Perintah shutdown/restart dari dashboard hanya berlaku 2 menit dan hanya dikirim sekali, jadi PC offline tidak akan tiba-tiba mati saat menyala lagi.
 - Shutdown/restart memakai `/f` (paksa tutup aplikasi, data belum tersimpan hilang). Ubah dengan `"force_shutdown": false`.
 
+## Pembaruan otomatis agent
+Cukup unggah `labagent.exe` hasil build lewat dashboard, semua PC memperbarui agent sendiri; PC yang sedang mati memperbarui saat menyala. Ada dua proses agent: agent biasa (user login, overlay) dan **pembantu** `labagent.exe --helper` (tugas `LabAgentHelper`, akun SYSTEM, jalan sejak boot). Pembantu yang mengunduh dan menukar exe di `Program Files\LabAgent`, serta menulis kebijakan registry Ctrl+Alt+Del atas permintaan agent (user biasa tidak bisa menulisnya).
+
+Keamanan: server tidak dipercaya untuk keaslian file. Rilis hanya dipasang bila ditandatangani kunci privat admin (Ed25519); PC memverifikasi dengan kunci publik di `config.json`. Kunci privat disimpan di komputer admin, **bukan** di server.
+
+Sekali saja:
+```
+python agent\tools\release.py keygen rilis.key      # cetak kunci publik; simpan rilis.key aman dan jangan di-commit
+```
+Isi kunci publik di `server/config.toml` (`update_public_key = "..."`), restart server, dan pasang agent dengan `-UpdatePublicKey <kunci publik>`.
+
+Tiap rilis:
+```
+agent\deploy\build.ps1
+python agent\tools\release.py sign agent\deploy\labagent.exe --key rilis.key --version 1.3.0
+```
+Di dashboard, bagian "Pembaruan agent": pilih `labagent.exe` dan `labagent.exe.release.json`, klik Unggah. Tiap PC menampilkan versi agent dan "menunggu pembaruan" sampai memakai rilis aktif.
+
+Cara kerja: pembantu bertanya ke server tiap 60 detik; bila SHA-256 exe rilis berbeda dari exe terpasang, ia mengunduh (jeda acak 0-120 dtk agar PC tidak mengunduh serentak), memeriksa ukuran, SHA-256, tanda tangan, dan awalan `MZ`, lalu menjalankan skrip pergantian lewat tugas sekali-jalan `LabAgentUpdate`. Skrip menghentikan agent, menukar exe (yang lama jadi `labagent.bak`), menyalakan ulang, dan menunggu 30 detik agar pembantu baru menulis `helper.ok` berisi SHA-nya. Jika tidak muncul, exe lama dipulihkan dan rilis itu dicatat di `updater.json` supaya tidak dicoba terus. Keputusan pakai SHA-256, bukan nomor versi, jadi tidak ada loop karena salah label. Menghentikan distribusi tidak mengembalikan agent ke versi lama; unggah rilis yang lebih lama bila perlu.
+
+Pembaruan hanya berjalan lewat LAN (`/api/agent/*` tidak dibuka lewat tunnel). PC yang masih memakai agent lama (sebelum v1.2.0) harus dipasang ulang sekali dengan `install.ps1`; setelah itu pembaruan otomatis.
+
 ## Pemulihan darurat (server rusak, PC terkunci)
 Bila server tidak bisa dihidupkan dan PC lab tetap terkunci, agent bisa dicopot dengan mencolok drive (flashdisk, HDD eksternal) yang berisi **file dengan nama rahasia** di folder paling atas (tingkat pertama).
 

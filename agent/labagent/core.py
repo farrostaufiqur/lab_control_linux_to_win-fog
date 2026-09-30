@@ -66,6 +66,7 @@ class Agent:
         self._logged_locked = None
         self._last_app: tuple[str, str] | None = None
         self._last_title_event = 0.0
+        self._exe_sha_cache: str | None = None
 
         self._state_file = Path(cfg.state_dir) / "state.json"
         self.add_event("agent_start", f"Agent v{VERSION} dimulai, user {self.user}")
@@ -144,6 +145,11 @@ class Agent:
             self._last_title_event = now
         self._last_app = (app, title)
 
+    def _exe_sha(self) -> str:
+        if self._exe_sha_cache is None:
+            self._exe_sha_cache = getattr(self.platform, "exe_sha256", lambda: "")()
+        return self._exe_sha_cache
+
     # network -------------------------------------------------------------
     def poll_once(self) -> bool:
         locked = self.view().locked
@@ -160,6 +166,7 @@ class Agent:
             "mem": self.platform.memory_percent(),
             "locked": locked,
             "version": VERSION,
+            "exe_sha": self._exe_sha(),
             "events": batch,
         }
         try:

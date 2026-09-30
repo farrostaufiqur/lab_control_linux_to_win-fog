@@ -12,12 +12,21 @@ Perangkat lunak manajemen lab komputer milik sekolah: server Linux (`server/`, F
 - `server/labserver/app.py`: API agent (`/api/agent/poll`, token) dan API admin (Basic auth + header `X-Lab-Admin: 1`)
 - `agent/labagent/core.py`: logika agent tanpa ketergantungan Windows
 - `agent/labagent/winapi.py`, `overlay.py`: bagian Windows
+- `agent/labagent/updater.py`, `helper.py`, `ed25519.py`: pembaruan otomatis dan pembantu SYSTEM (lihat bawah); logika murni, efek samping disuntikkan lewat `helper.Ports`
+- `server/labserver/release.py`, `ed25519.py`: penyimpanan rilis; `ed25519.py` salinan identik dari agent (dicek tes), format pesan tanda tangan harus sama dengan `updater.release_message`
+- `agent/tools/release.py`: keygen/sign rilis, dijalankan di komputer admin
 - `agent/labagent/killswitch.py`: pemulihan darurat admin (lihat bawah); logikanya murni, bagian Windows ada di `winapi.py`
 
 ## Pemulihan darurat (pencopotan lewat drive)
 Untuk saat server tidak bisa dipakai dan PC lab tidak bisa dibuka. `labagent.exe --watch-usb` (tugas `LabAgentKillSwitch`, akun SYSTEM) membaca sekali tiap drive yang terpasang, hanya nama file tingkat pertama. Jika ada file bernama sesuai `kill_file_sha256` di `config.json`, agent dicopot: tugas terjadwal, proses, kebijakan registry, dan foldernya dihapus.
 - Diaktifkan lewat `install.ps1 -KillFileName <nama-file>`; yang disimpan hanya SHA-256 nama itu. Kosong = fitur mati.
 - Nama file dipilih dan dipegang admin; jangan dicetak atau di-commit.
+
+## Pembaruan otomatis dan pembantu SYSTEM
+- `labagent.exe --helper` (tugas `LabAgentHelper`, SYSTEM, AtStartup) menulis 4 nilai registry Ctrl+Alt+Del ke `HKEY_USERS\<sid>` dari `state_dir\policy.json` (divalidasi ketat, folder itu bisa ditulis user) dan memasang rilis baru. Berkas yang menentukan exe (unduhan, `apply-update.cmd`, `updater.json`, `helper.ok`) hanya di folder pemasangan (admin).
+- Rilis harus ditandatangani Ed25519; kunci privat tidak pernah di server dan tidak boleh di-commit/ditampilkan. Kunci publik: `update_public_key` di `config.toml` server dan `config.json` agent (`install.ps1 -UpdatePublicKey`).
+- Keputusan pembaruan = SHA-256 exe terpasang vs rilis, bukan nomor versi. Pergantian gagal (tidak ada `helper.ok` baru dalam 30 dtk) otomatis dipulihkan.
+- Agent tanpa helper (mis. belum dipasang ulang) mencoba menulis registry langsung; pada PC dengan kunci Policies milik SYSTEM itu gagal.
 
 ## Mengoperasikan lab lewat API
 Kredensial lewat variabel lingkungan, jangan ditulis ke file:
@@ -47,4 +56,6 @@ Hari: 0 = Senin ... 6 = Minggu. Bila dashboard di belakang Cloudflare Access, ta
 - Pemulihan darurat: logika dan tes selesai (`tests/test_killswitch.py`), tetapi `winapi.list_drives`, `list_names`, `remove_agent`, mode `--watch-usb`, dan tugas SYSTEM di `install.ps1` **belum dicoba di Windows**. Uji di satu PC: pasang dengan `-KillFileName`, colok drive berisi file itu, pastikan agent hilang. Cek juga pemasangan ulang oleh watchdog tidak terjadi.
 - `labagent.exe` perlu dibangun ulang (`build.ps1`) dan dipasang ulang agar mode `--watch-usb` ada.
 - Profil user yang **tidak sedang login** tidak dibersihkan dari kebijakan registry saat pencopotan (sama dengan `uninstall.ps1`).
+- Pembaruan otomatis + helper: logika dan endpoint server sudah diuji (`tests/test_helper.py`, `test_updater.py`, `server/tests/test_release.py`, plus uji ujung-ke-ujung helper terhadap server), tetapi `winapi.apply_user_policies`, `launch_update` (tugas `LabAgentUpdate`), `current_sid`, `own_exe_sha256`, `apply-update.cmd`, dan tugas `LabAgentHelper` **belum dicoba di Windows**. Uji di satu PC: build, `install.ps1 -UpdatePublicKey`, cek overlay bisa mengunci tanpa "Kebijakan registry gagal", lalu unggah rilis dengan versi berbeda dan pastikan exe berganti, `helper.ok` berisi SHA baru, dan rollback berjalan bila exe rusak. Curigai: apakah `schtasks /TR "\"path\""` menerima path dengan spasi, dan apakah skrip `.cmd` dari tugas SYSTEM sekali-jalan tetap hidup setelah `taskkill labagent.exe`.
+- PC dengan agent v1.1.x harus dipasang ulang manual sekali (`build.ps1` lalu `install.ps1`); baru setelah itu pembaruan otomatis.
 - Uji Windows umum yang belum tercatat: overlay di semua monitor, keyboard terblokir, layar Ctrl+Alt+Del, tombol shutdown.

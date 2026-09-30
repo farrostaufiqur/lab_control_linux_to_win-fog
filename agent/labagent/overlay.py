@@ -16,7 +16,7 @@ class Overlay:
     def __init__(self, agent, winapi, cfg):
         self.agent, self.winapi, self.cfg = agent, winapi, cfg
         self.blocker = winapi.KeyboardBlocker()
-        self.policies = winapi.LockdownPolicies()
+        self.policies = winapi.LockdownPolicies(cfg.state_dir)
         self._confirm: dict[str, float] = {}
 
         self.root = tk.Tk()

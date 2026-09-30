@@ -2,6 +2,8 @@
 $ErrorActionPreference = "SilentlyContinue"
 Unregister-ScheduledTask -TaskName "LabAgent" -Confirm:$false
 Unregister-ScheduledTask -TaskName "LabAgentKillSwitch" -Confirm:$false
+Unregister-ScheduledTask -TaskName "LabAgentHelper" -Confirm:$false
+Unregister-ScheduledTask -TaskName "LabAgentUpdate" -Confirm:$false
 Get-Process labagent | Stop-Process -Force
 Remove-Item "$env:ProgramFiles\LabAgent" -Recurse -Force
 Remove-Item "$env:ProgramData\LabAgent" -Recurse -Force

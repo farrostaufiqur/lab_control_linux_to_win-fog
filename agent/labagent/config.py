@@ -17,6 +17,7 @@ class AgentConfig:
     state_dir: str = r"C:\ProgramData\LabAgent"
     kill_file_sha256: str = ""              # SHA-256 of the secret file name that removes the agent (empty = feature off)
     sample_interval: float = 2.0
+    update_public_key: str = ""             # kunci publik Ed25519 (hex 64 karakter) untuk memverifikasi rilis agent; kosong = pembaruan otomatis mati
 
 
 def default_path() -> Path:
@@ -36,4 +37,7 @@ def load(path: Path | None = None) -> AgentConfig:
         raise ValueError("server_url harus diawali http:// atau https://")
     if cfg.offline_boot_policy not in ("lock", "unlock"):
         raise ValueError("offline_boot_policy harus 'lock' atau 'unlock'")
+    key = cfg.update_public_key
+    if key and (len(key) != 64 or any(c not in "0123456789abcdefABCDEF" for c in key)):
+        raise ValueError("update_public_key harus 64 karakter heksadesimal")
     return cfg
