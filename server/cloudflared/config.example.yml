@@ -1,0 +1,12 @@
+# Salin ke /etc/cloudflared/config.yml lalu ganti UUID dan hostname.
+# Hanya dashboard yang dibuka ke internet. Jalur agent (/api/agent) dijawab 404 di sisi Cloudflare.
+tunnel: GANTI-DENGAN-UUID-TUNNEL
+credentials-file: /etc/cloudflared/GANTI-DENGAN-UUID-TUNNEL.json
+
+ingress:
+  - hostname: lab.contoh.com
+    path: ^/api/agent
+    service: http_status:404
+  - hostname: lab.contoh.com
+    service: http://localhost:8080
+  - service: http_status:404

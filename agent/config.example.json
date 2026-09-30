@@ -1,0 +1,12 @@
+{
+  "server_url": "http://192.168.1.10:8080",
+  "token": "ISI_DENGAN_agent_token_DARI_SERVER",
+  "offline_boot_policy": "lock",
+  "boot_grace_seconds": 60,
+  "log_titles": true,
+  "force_shutdown": true,
+  "always_block_taskmgr": true,
+  "exempt_users": ["administrator", "admin", "labadmin"],
+  "state_dir": "C:\\ProgramData\\LabAgent",
+  "kill_file_sha256": ""
+}

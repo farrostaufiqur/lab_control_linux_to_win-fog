@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab Control</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1a1d23; --muted: #6b7280; --line: #e3e6eb;
+    --accent: #2563eb; --ok: #16a34a; --bad: #dc2626; --warn: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111318; --card: #1a1d24; --text: #e6e8ec; --muted: #9aa1ad; --line: #2a2f39; --accent: #5b8def; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 20px;
+           background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0 auto 0 0; }
+  main { padding: 20px; max-width: 1300px; margin: auto; display: grid; gap: 20px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .table-wrap { overflow-x: auto; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+           border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); }
+  input, select { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+                  border-radius: 6px; padding: 4px 8px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .dot.on { background: var(--ok); }
+  .badge { padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .badge.locked { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .badge.open { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .trunc { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .rule { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 0; }
+  .rule label { display: inline-flex; gap: 3px; align-items: center; }
+  #menu { position: absolute; display: none; background: var(--card); border: 1px solid var(--line);
+          border-radius: 8px; padding: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 10; min-width: 190px; }
+  #menu button { display: block; width: 100%; text-align: left; border: 0; }
+  #menu button:hover { background: var(--bg); }
+  #log { max-height: 340px; overflow: auto; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  #log div { padding: 2px 0; border-bottom: 1px solid var(--line); }
+  #log .t { color: var(--muted); margin-right: 8px; }
+  #log .pc { font-weight: 600; margin-right: 8px; }
+  #err { color: var(--bad); }
+  dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); padding: 18px; width: min(460px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog textarea { width: 100%; font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+                    border-radius: 6px; padding: 8px; resize: vertical; }
+  dialog h3 { margin: 0 0 4px; font-size: 15px; }
+  .rule select.type { min-width: 190px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Lab Control</h1>
+  <span id="err"></span>
+  <span class="muted" id="summary"></span>
+  <button data-all="lock">Kunci semua</button>
+  <button data-all="unlock">Buka semua</button>
+  <button data-all="clear">Semua ikut jadwal</button>
+  <button data-msg="*">Pesan ke semua</button>
+</header>
+<main>
+  <section>
+    <h2>Komputer</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>PC</th><th>User</th><th>Aplikasi aktif</th><th>Idle</th><th>Uptime</th><th>Kunci</th><th></th></tr></thead>
+        <tbody id="pcs"><tr><td colspan="7" class="muted">Memuat…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Jadwal sesi</h2>
+    <p class="muted">Komputer terbuka hanya pada jam di bawah. Di luar itu layar dikunci otomatis.
+      Tiap baris bisa berulang setiap hari, setiap pekan pada hari yang dipilih, atau hanya pada satu tanggal.</p>
+    <p><label>Zona waktu <select id="tz"></select></label> <span class="muted" id="tz-now"></span></p>
+    <label><input type="checkbox" id="sched-enabled"> Aktifkan jadwal</label>
+    <div id="rules"></div>
+    <div class="actions" style="margin-top:8px">
+      <button id="add-rule">+ Tambah jam</button>
+      <button class="primary" id="save-sched">Simpan jadwal</button>
+      <span class="muted" id="sched-msg"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Log aktivitas</h2>
+    <div style="margin-bottom:8px">
+      <select id="log-pc"><option value="">Semua PC</option></select>
+    </div>
+    <div id="log"></div>
+  </section>
+</main>
+<div id="menu"></div>
+<dialog id="msg">
+  <h3 id="msg-title">Kirim pesan</h3>
+  <p class="muted">Pesan tampil di layar PC yang sedang terkunci.</p>
+  <textarea id="msg-text" rows="3" maxlength="300" placeholder="Tulis pesan (maks. 300 karakter)"></textarea>
+  <p><label>Tampil selama
+    <select id="msg-min">
+      <option value="15">15 menit</option><option value="60" selected>1 jam</option>
+      <option value="240">4 jam</option><option value="">Sampai dihapus</option>
+    </select></label></p>
+  <div class="actions">
+    <button class="primary" id="msg-send">Kirim</button>
+    <button id="msg-clear" class="danger">Hapus pesan</button>
+    <button id="msg-cancel">Tutup</button>
+    <span class="muted" id="msg-status"></span>
+  </div>
+</dialog>
+
+<script>
+const DAYS = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+const $ = (sel) => document.querySelector(sel);
+let data = null;
+
+async function api(path, method = "GET", body) {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json", "X-Lab-Admin": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.json();
+}
+async function act(path, method, body) {
+  try { await api(path, method, body); $("#err").textContent = ""; refresh(); }
+  catch (e) { $("#err").textContent = e.message; }
+}
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function dur(sec) {
+  if (sec == null) return "";
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}j ${m}m` : m ? `${m}m ${s}dtk` : `${s}dtk`;
+}
+const clock = (ts) => new Date(ts * 1000).toLocaleTimeString("id-ID");
+
+function lockCell(pc) {
+  const badge = pc.locked ? `<span class="badge locked">Terkunci</span>` : `<span class="badge open">Terbuka</span>`;
+  const src = { manual: "manual", global: "semua PC", schedule: "jadwal" }[pc.source];
+  const next = pc.changes_in == null ? "tanpa batas" : `${pc.locked ? "buka" : "kunci"} dalam ${dur(pc.changes_in)}`;
+  return `${badge}<div class="muted">${src} · ${next}</div>`;
+}
+
+function render() {
+  const { pcs } = data;
+  $("#title").textContent = data.lab_name;
+  $("#tz-now").textContent = new Date().toLocaleTimeString("id-ID", { timeZone: data.timezone }) + " di zona ini";
+  if ($("#tz").value !== data.timezone && document.activeElement !== $("#tz")) $("#tz").value = data.timezone;
+  const online = pcs.filter((p) => p.online).length;
+  const locked = pcs.filter((p) => p.online && p.locked).length;
+  $("#summary").textContent = `${online}/${pcs.length} online · ${locked} terkunci` +
+    (data.global_override ? ` · override global: ${data.global_override.mode}` : "");
+  $("#pcs").innerHTML = pcs.length ? pcs.map((pc) => `
+    <tr>
+      <td><span class="dot ${pc.online ? "on" : ""}"></span><b>${esc(pc.id)}</b>
+          <div class="muted">${esc(pc.ip)}${pc.online ? "" : " · terakhir " + clock(pc.last_seen)}</div></td>
+      <td>${pc.online ? esc(pc.user) : ""}</td>
+      <td class="trunc" title="${esc(pc.title)}">${pc.online ? esc(pc.app) : ""}<div class="muted trunc">${pc.online ? esc(pc.title) : ""}</div></td>
+      <td>${pc.online ? dur(pc.idle) : ""}</td>
+      <td>${pc.online ? dur(pc.uptime) : ""}</td>
+      <td>${lockCell(pc)}</td>
+      <td><div class="actions">
+        <button data-menu="lock" data-pc="${esc(pc.id)}">Kunci ▾</button>
+        <button data-menu="unlock" data-pc="${esc(pc.id)}">Buka ▾</button>
+        ${pc.override ? `<button data-clear="${esc(pc.id)}">Ikut jadwal</button>` : ""}
+        <button data-msg="${esc(pc.id)}">Pesan</button>
+        <button data-cmd="restart" data-pc="${esc(pc.id)}">Restart</button>
+        <button class="danger" data-cmd="shutdown" data-pc="${esc(pc.id)}">Matikan</button>
+      </div></td>
+    </tr>`).join("") : `<tr><td colspan="7" class="muted">Belum ada PC. Pasang agent di client Windows.</td></tr>`;
+  const sel = $("#log-pc"), keep = sel.value;
+  sel.innerHTML = `<option value="">Semua PC</option>` + pcs.map((p) => `<option ${p.id === keep ? "selected" : ""}>${esc(p.id)}</option>`).join("");
+}
+
+async function refresh() {
+  try { data = await api("/api/pcs"); render(); $("#err").textContent = ""; }
+  catch (e) { $("#err").textContent = "Server tidak terjangkau: " + e.message; }
+}
+
+async function refreshLog() {
+  try {
+    const rows = await api("/api/events?limit=200&pc=" + encodeURIComponent($("#log-pc").value));
+    $("#log").innerHTML = rows.map((r) => `<div><span class="t">${new Date(r.ts * 1000).toLocaleString("id-ID")}</span>` +
+      `<span class="pc">${esc(r.pc)}</span>${esc(r.detail)}</div>`).join("") || `<span class="muted">Belum ada log.</span>`;
+  } catch (e) { /* refresh() already reports connectivity */ }
+}
+
+// duration menu -------------------------------------------------------------
+const DURATIONS = [[15, "15 menit"], [30, "30 menit"], [60, "1 jam"], [120, "2 jam"], [240, "4 jam"], [null, "Tanpa batas waktu"]];
+let menuTarget = null;
+function openMenu(button, mode, target) {
+  menuTarget = target;
+  $("#menu").innerHTML = DURATIONS.map(([m, label]) => `<button data-mode="${mode}" data-min="${m ?? ""}">${label}</button>`).join("");
+  const r = button.getBoundingClientRect();
+  Object.assign($("#menu").style, { display: "block", left: r.left + scrollX + "px", top: r.bottom + scrollY + 4 + "px" });
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  const menu = $("#menu");
+  if (!t) { menu.style.display = "none"; return; }
+  if (t.dataset.menu) { openMenu(t, t.dataset.menu, t.dataset.pc); e.stopPropagation(); return; }
+  if (t.dataset.all === "clear") return act("/api/all/clear", "POST");
+  if (t.dataset.all) { openMenu(t, t.dataset.all, "*"); e.stopPropagation(); return; }
+  if (t.dataset.msg) { openMessage(t.dataset.msg); menu.style.display = "none"; return; }
+  if (t.dataset.mode) {
+    const minutes = t.dataset.min === "" ? null : Number(t.dataset.min);
+    const path = menuTarget === "*" ? `/api/all/${t.dataset.mode}` : `/api/pcs/${encodeURIComponent(menuTarget)}/${t.dataset.mode}`;
+    menu.style.display = "none";
+    return act(path, "POST", { minutes });
+  }
+  menu.style.display = "none";
+  if (t.dataset.clear) return act(`/api/pcs/${encodeURIComponent(t.dataset.clear)}/clear`, "POST");
+  if (t.dataset.cmd) {
+    const label = t.dataset.cmd === "shutdown" ? "mematikan" : "me-restart";
+    if (confirm(`Yakin ${label} ${t.dataset.pc}? Pekerjaan yang belum disimpan di PC itu akan hilang.`))
+      return act(`/api/pcs/${encodeURIComponent(t.dataset.pc)}/command`, "POST", { action: t.dataset.cmd });
+  }
+});
+
+// schedule ------------------------------------------------------------------
+const RULE_TYPES = [["weekly", "Setiap pekan (hari dipilih)"], ["daily", "Setiap hari"], ["once", "Tanggal tertentu"]];
+function ruleRow(rule = { type: "weekly", days: [0, 1, 2, 3, 4], start: "08:00", end: "16:00" }) {
+  const type = rule.type || "weekly", days = rule.days || [0, 1, 2, 3, 4];
+  const div = document.createElement("div");
+  div.className = "rule";
+  div.innerHTML =
+    `<select class="type">${RULE_TYPES.map(([v, l]) => `<option value="${v}" ${v === type ? "selected" : ""}>${l}</option>`).join("")}</select>` +
+    `<span class="days">${DAYS.map((d, i) => `<label><input type="checkbox" value="${i}" ${days.includes(i) ? "checked" : ""}>${d}</label>`).join("")}</span>` +
+    `<input type="date" class="date" value="${esc(rule.date || "")}">` +
+    `<input type="time" class="start" value="${rule.start}"> – <input type="time" class="end" value="${rule.end}">` +
+    `<button class="danger">Hapus</button>`;
+  const sync = () => {
+    const kind = div.querySelector(".type").value;
+    div.querySelector(".days").style.display = kind === "weekly" ? "" : "none";
+    div.querySelector(".date").style.display = kind === "once" ? "" : "none";
+  };
+  div.querySelector(".type").onchange = sync;
+  div.querySelector("button").onclick = () => div.remove();
+  sync();
+  return div;
+}
+async function loadSchedule() {
+  const s = await api("/api/schedule");
+  $("#sched-enabled").checked = s.enabled;
+  $("#rules").replaceChildren(...s.rules.map(ruleRow));
+}
+async function loadTimezones() {
+  const { current, zones } = await api("/api/timezones");
+  const first = ["Asia/Jakarta", "Asia/Makassar", "Asia/Jayapura", "Asia/Pontianak"];
+  const label = { "Asia/Jakarta": "WIB (Asia/Jakarta)", "Asia/Makassar": "WITA (Asia/Makassar)", "Asia/Jayapura": "WIT (Asia/Jayapura)" };
+  const option = (z) => `<option value="${esc(z)}">${esc(label[z] || z)}</option>`;
+  $("#tz").innerHTML = `<optgroup label="Indonesia">${first.filter((z) => zones.includes(z)).map(option).join("")}</optgroup>` +
+    `<optgroup label="Lainnya">${zones.filter((z) => !first.includes(z)).map(option).join("")}</optgroup>`;
+  $("#tz").value = current;
+}
+$("#tz").onchange = async () => {
+  try { await api("/api/timezone", "PUT", { timezone: $("#tz").value }); $("#err").textContent = ""; refresh(); }
+  catch (e) { $("#err").textContent = e.message; }
+};
+$("#add-rule").onclick = () => $("#rules").append(ruleRow());
+$("#save-sched").onclick = async () => {
+  const rules = [...document.querySelectorAll(".rule")].map((row) => {
+    const type = row.querySelector(".type").value;
+    const rule = { type, start: row.querySelector(".start").value, end: row.querySelector(".end").value };
+    if (type === "weekly") rule.days = [...row.querySelectorAll("input[type=checkbox]:checked")].map((c) => Number(c.value));
+    if (type === "once") rule.date = row.querySelector(".date").value;
+    return rule;
+  });
+  try {
+    await api("/api/schedule", "PUT", { enabled: $("#sched-enabled").checked, rules });
+    $("#sched-msg").textContent = "Tersimpan ✓"; refresh();
+  } catch (e) { $("#sched-msg").textContent = "Gagal: " + e.message; }
+  setTimeout(() => ($("#sched-msg").textContent = ""), 3000);
+};
+
+// messages ------------------------------------------------------------------
+let msgTarget = null;
+const msgPath = () => msgTarget === "*" ? "/api/all/message" : `/api/pcs/${encodeURIComponent(msgTarget)}/message`;
+function openMessage(target) {
+  msgTarget = target;
+  $("#msg-title").textContent = target === "*" ? "Pesan ke semua komputer" : `Pesan ke ${target}`;
+  $("#msg-status").textContent = "";
+  $("#msg-text").value = "";
+  $("#msg").showModal();
+  $("#msg-text").focus();
+}
+async function msgCall(method, body, okText) {
+  try { await api(msgPath(), method, body); $("#msg-status").textContent = okText; refresh(); refreshLog(); }
+  catch (e) { $("#msg-status").textContent = "Gagal: " + e.message; }
+}
+$("#msg-send").onclick = () => {
+  const min = $("#msg-min").value;
+  msgCall("POST", { text: $("#msg-text").value, minutes: min === "" ? null : Number(min) }, "Terkirim ✓");
+};
+$("#msg-clear").onclick = () => msgCall("DELETE", undefined, "Pesan dihapus ✓");
+$("#msg-cancel").onclick = () => $("#msg").close();
+
+$("#log-pc").onchange = refreshLog;
+refresh(); loadTimezones().then(loadSchedule); refreshLog();
+setInterval(refresh, 3000);
+setInterval(refreshLog, 5000);
+</script>
+</body>
+</html>
