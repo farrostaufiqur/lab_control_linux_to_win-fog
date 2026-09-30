@@ -254,3 +254,21 @@ def test_server_restart_needs_admin_and_systemd(client, monkeypatch):
     import time
     time.sleep(0.05)
     assert called == [1]
+
+
+def test_rename_pc_display_name(client):
+    poll(client)
+    assert client.put("/api/pcs/PC-01/name", json={"name": "  Meja 1  "}, headers=ADMIN).get_json()["name"] == "Meja 1"
+    poll(client)  # laporan berikutnya tidak menghapus nama
+    pc = client.get("/api/pcs", headers=ADMIN).get_json()["pcs"][0]
+    assert pc["id"] == "PC-01" and pc["name"] == "Meja 1"
+    client.put("/api/pcs/PC-01/name", json={"name": ""}, headers=ADMIN)
+    assert client.get("/api/pcs", headers=ADMIN).get_json()["pcs"][0]["name"] == "PC-01"
+
+
+def test_rename_validation(client):
+    poll(client)
+    assert client.put("/api/pcs/PC-01/name", json={"name": "x" * 41}, headers=ADMIN).status_code == 400
+    assert client.put("/api/pcs/PC-01/name", json={"name": "a\nb"}, headers=ADMIN).status_code == 400
+    assert client.put("/api/pcs/NOPE/name", json={"name": "a"}, headers=ADMIN).status_code == 404
+    assert client.put("/api/pcs/PC-01/name", json={"name": "a"}).status_code == 401

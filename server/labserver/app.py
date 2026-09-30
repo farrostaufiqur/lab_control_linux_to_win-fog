@@ -20,6 +20,7 @@ COMMANDS = {"shutdown", "restart"}
 MAX_EVENTS_PER_POLL = 200
 MAX_OVERRIDE_MINUTES = 60 * 24 * 7
 MAX_NOTICE_CHARS = 300
+MAX_NAME_CHARS = 40
 ALL_ZONES = frozenset(available_timezones())
 
 
@@ -136,6 +137,7 @@ def create_app(cfg: Config) -> Flask:
         state = state_for(row, now)
         return {
             "id": row["id"],
+            "name": row["alias"] or row["id"],
             "online": now - row["last_seen"] <= cfg.online_timeout,
             "last_seen": row["last_seen"],
             "first_seen": row["first_seen"],
@@ -328,6 +330,17 @@ def create_app(cfg: Config) -> Flask:
         if row is None:
             abort(404)
         return row
+
+    @app.put("/api/pcs/<pc_id>/name")
+    def api_pc_rename(pc_id):
+        admin_only()
+        pc_or_404(pc_id)
+        name = str((request.get_json(silent=True) or {}).get("name") or "").strip()
+        if len(name) > MAX_NAME_CHARS or any(ord(c) < 32 for c in name):
+            abort(400, f"nama maksimal {MAX_NAME_CHARS} karakter tanpa karakter kontrol")
+        store.set_alias(pc_id, name or None)
+        store.add_event(pc_id, "info", f"Admin mengganti nama tampilan menjadi {name}" if name else "Admin menghapus nama tampilan")
+        return jsonify(ok=True, name=name or pc_id)
 
     @app.post("/api/pcs/<pc_id>/lock")
     def api_pc_lock(pc_id):

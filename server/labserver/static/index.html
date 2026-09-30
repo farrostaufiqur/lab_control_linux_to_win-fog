@@ -189,8 +189,8 @@ function render() {
     (data.global_override ? ` · override global: ${data.global_override.mode}` : "");
   $("#pcs").innerHTML = pcs.length ? pcs.map((pc) => `
     <tr>
-      <td><span class="dot ${pc.online ? "on" : ""}"></span><b>${esc(pc.id)}</b>
-          <div class="muted">${esc(pc.ip)}${pc.online ? "" : " · terakhir " + clock(pc.last_seen)}</div>
+      <td><span class="dot ${pc.online ? "on" : ""}"></span><b>${esc(pc.name)}</b>
+          <div class="muted">${pc.name !== pc.id ? esc(pc.id) + " · " : ""}${esc(pc.ip)}${pc.online ? "" : " · terakhir " + clock(pc.last_seen)}</div>
           <div class="muted">${buildLabel(pc)}</div></td>
       <td>${pc.online ? esc(pc.user) : ""}</td>
       <td class="trunc" title="${esc(pc.title)}">${pc.online ? esc(pc.app) : ""}<div class="muted trunc">${pc.online ? esc(pc.title) : ""}</div></td>
@@ -202,6 +202,7 @@ function render() {
         <button data-menu="unlock" data-pc="${esc(pc.id)}">Buka ▾</button>
         ${pc.override ? `<button data-clear="${esc(pc.id)}">Ikut jadwal</button>` : ""}
         <button data-msg="${esc(pc.id)}">Pesan</button>
+        <button data-rename="${esc(pc.id)}" data-name="${esc(pc.name === pc.id ? "" : pc.name)}">Nama</button>
         <button data-cmd="restart" data-pc="${esc(pc.id)}">Restart</button>
         <button class="danger" data-cmd="shutdown" data-pc="${esc(pc.id)}">Matikan</button>
       </div></td>
@@ -259,6 +260,11 @@ document.addEventListener("click", (e) => {
     return act(path, "POST", { minutes });
   }
   menu.style.display = "none";
+  if (t.dataset.rename) {
+    const name = prompt(`Nama tampilan untuk ${t.dataset.rename} (kosongkan untuk memakai nama asli):`, t.dataset.name);
+    if (name !== null) return act(`/api/pcs/${encodeURIComponent(t.dataset.rename)}/name`, "PUT", { name });
+    return;
+  }
   if (t.dataset.clear) return act(`/api/pcs/${encodeURIComponent(t.dataset.clear)}/clear`, "POST");
   if (t.dataset.cmd) {
     const label = t.dataset.cmd === "shutdown" ? "mematikan" : "me-restart";

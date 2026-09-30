@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS pcs (
     ip TEXT, user TEXT, app TEXT, title TEXT,
     idle INTEGER, uptime INTEGER, mem INTEGER,
     locked INTEGER, version TEXT, exe_sha TEXT,
-    override TEXT
+    override TEXT,
+    alias TEXT
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,8 +49,10 @@ class Store:
         self.path = path
         with self.tx() as db:
             db.executescript(SCHEMA)
-            if "exe_sha" not in {row["name"] for row in db.execute("PRAGMA table_info(pcs)")}:
-                db.execute("ALTER TABLE pcs ADD COLUMN exe_sha TEXT")  # database lama sebelum pembaruan otomatis
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(pcs)")}
+            for column in ("exe_sha", "alias"):  # database lama sebelum kolom ini ada
+                if column not in columns:
+                    db.execute(f"ALTER TABLE pcs ADD COLUMN {column} TEXT")
         self._last_prune = 0.0
 
     @contextmanager
@@ -109,6 +112,10 @@ class Store:
         """Helper melapor build-nya sendiri (berguna saat belum ada user login); hanya untuk PC yang sudah dikenal."""
         with self.tx() as db:
             db.execute("UPDATE pcs SET version=?, exe_sha=? WHERE id=?", (version, exe_sha, pc_id))
+
+    def set_alias(self, pc_id: str, alias: str | None) -> bool:
+        with self.tx() as db:
+            return db.execute("UPDATE pcs SET alias=? WHERE id=?", (alias, pc_id)).rowcount > 0
 
     def add_event(self, pc_id: str, type_: str, detail: str, ts: float | None = None):
         with self.tx() as db:
