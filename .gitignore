@@ -63,3 +63,11 @@ Thumbs.db
 server/releases/
 server/screenshots/
 agent/deploy/install.conf
+
+# Konfigurasi server (berisi password admin & token agent) dan artefak build agent
+server/config.toml
+agent/build/
+agent/*.spec
+agent/deploy/labagent.exe
+agent/prompt_*.txt
+agent/deploy/prompt_*.txt
