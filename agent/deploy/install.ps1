@@ -1,11 +1,14 @@
 #Requires -RunAsAdministrator
 <#
-  Memasang agent di PC client. Jalankan sebagai Administrator di setiap PC lab:
+  Memasang agent di PC client. Cara termudah: klik dua kali install.cmd (meminta hak Administrator sendiri).
+  Atau dari PowerShell Administrator:
     .\install.ps1 -ServerUrl http://192.168.1.10:8080 -Token <agent_token>
+  Parameter yang tidak diberikan dibaca dari install.conf di folder ini (baris Kunci=Nilai). Bila ServerUrl/Token
+  tetap kosong, skrip menanyakannya lalu menyimpannya ke install.conf supaya PC berikutnya tinggal klik.
 #>
 param(
-    [Parameter(Mandatory)][string]$ServerUrl,
-    [Parameter(Mandatory)][string]$Token,
+    [string]$ServerUrl = "",
+    [string]$Token = "",
     [string]$Exe = "$PSScriptRoot\labagent.exe",
     [string[]]$ExemptUsers = @("administrator", "admin", "labadmin"),
     [ValidateSet("lock", "unlock")][string]$OfflineBootPolicy = "lock",
@@ -13,6 +16,34 @@ param(
     [string]$UpdatePublicKey = "" # opsional: kunci publik rilis (64 hex) agar agent memperbarui diri dari server
 )
 $ErrorActionPreference = "Stop"
+
+# install.conf: berisi token, jangan dibagikan atau di-commit
+$confPath = Join-Path $PSScriptRoot "install.conf"
+$conf = @{}
+if (Test-Path $confPath) {
+    foreach ($line in Get-Content $confPath) {
+        if ($line -match '^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$') { $conf[$Matches[1]] = $Matches[2] }
+    }
+}
+if (-not $ServerUrl)       { $ServerUrl = [string]$conf["ServerUrl"] }
+if (-not $Token)           { $Token = [string]$conf["Token"] }
+if (-not $KillFileName)    { $KillFileName = [string]$conf["KillFileName"] }
+if (-not $UpdatePublicKey) { $UpdatePublicKey = [string]$conf["UpdatePublicKey"] }
+if (-not $PSBoundParameters.ContainsKey("OfflineBootPolicy") -and $conf["OfflineBootPolicy"] -in "lock", "unlock") {
+    $OfflineBootPolicy = $conf["OfflineBootPolicy"]
+}
+if (-not $ServerUrl -or -not $Token) {
+    Write-Host "Pengaturan belum ada. Isi sekali; disimpan ke install.conf untuk PC berikutnya."
+    if (-not $ServerUrl) { $ServerUrl = (Read-Host "Alamat server (mis. http://192.168.1.10:8080 atau https://lab.contoh.com)").Trim() }
+    if (-not $Token)     { $Token = (Read-Host "Token agent (agent_token di config.toml server)").Trim() }
+    if (-not $KillFileName)    { $KillFileName = (Read-Host "Nama file pemulihan darurat (Enter = tidak dipakai)").Trim() }
+    if (-not $UpdatePublicKey) { $UpdatePublicKey = (Read-Host "Kunci publik pembaruan, 64 hex (Enter = tidak dipakai)").Trim() }
+    @("ServerUrl=$ServerUrl", "Token=$Token", "KillFileName=$KillFileName", "UpdatePublicKey=$UpdatePublicKey",
+      "OfflineBootPolicy=$OfflineBootPolicy") | Set-Content -Path $confPath -Encoding ASCII
+}
+if ($ServerUrl -notmatch '^https?://') { throw "ServerUrl harus diawali http:// atau https://" }
+if (-not $Token) { throw "Token wajib diisi" }
+
 if (-not (Test-Path $Exe)) { throw "labagent.exe tidak ditemukan di $Exe (jalankan build.ps1 dulu)" }
 
 $dir  = Join-Path $env:ProgramFiles "LabAgent"     # hanya admin yang bisa menulis

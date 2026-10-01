@@ -92,6 +92,16 @@ Tanpa domain, untuk uji sementara: `cloudflared tunnel --url http://localhost:80
 
 Hapus dengan `uninstall.ps1`.
 
+**Sekali klik:** di folder `agent\deploy` ada `build.cmd`, `install.cmd`, dan `uninstall.cmd`. Klik dua kali; `install.cmd` dan `uninstall.cmd` meminta hak Administrator sendiri lewat UAC (tidak perlu "Run as administrator"), `build.cmd` tidak butuh hak itu. `install.cmd` membaca pengaturan dari `install.conf` di folder yang sama:
+```
+ServerUrl=http://192.168.1.10:8080
+Token=<agent_token>
+KillFileName=
+UpdatePublicKey=
+OfflineBootPolicy=lock
+```
+Bila berkas itu belum ada, pemasangan pertama menanyakan isinya lalu menyimpannya, sehingga PC berikutnya (folder yang sama di flashdisk) tinggal klik. `install.conf` berisi token: jangan dibagikan atau di-commit.
+
 ### Syarat agar kunci sulit dilewati
 - Akun siswa harus **akun standar**, bukan Administrator.
 - Buat akun admin lab dengan nama di `exempt_users` (default: `administrator`, `admin`, `labadmin`). Agent tidak mengunci akun itu. Untuk masuk sebagai admin di PC yang terkunci, tekan **Restart** di overlay lalu login sebagai admin.
