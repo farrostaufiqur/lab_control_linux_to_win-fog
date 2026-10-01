@@ -21,7 +21,7 @@ Halaman terpisah dengan sidebar (tampilan dari template admin yang sama dengan a
 - **Jadwal sesi**, **Log aktivitas**, **Pembaruan agent**, **Pengaturan** (interval screenshot, restart server).
 
 ## Screenshot berkala
-Selama PC **tidak terkunci**, agent (v1.4.0 ke atas) mengirim gambar monitor utama tiap 30 detik (JPEG, lebar maks 1280). Interval diatur di halaman Pengaturan: mati, 10 dtk, 30 dtk, 1 mnt, 5 mnt. Server hanya menyimpan **gambar terakhir** tiap PC (`screenshots/` di samping database); tidak ada riwayat. Mematikan fitur menghapus semua gambar. Gambar tidak ditampilkan saat PC terkunci atau offline. Build agent kini butuh Pillow (`build.ps1` memasangnya).
+Selama PC **tidak terkunci**, agent (v1.2.0 ke atas) mengirim gambar monitor utama tiap 30 detik (JPEG, lebar maks 1280). Interval diatur di halaman Pengaturan: mati, 10 dtk, 30 dtk, 1 mnt, 5 mnt. Server hanya menyimpan **gambar terakhir** tiap PC (`screenshots/` di samping database); tidak ada riwayat. Mematikan fitur menghapus semua gambar. Gambar tidak ditampilkan saat PC terkunci atau offline. Build agent kini butuh Pillow (`build.ps1` memasangnya).
 
 ## Cara kunci bekerja
 - Overlay layar penuh (semua monitor), selalu di atas, aplikasi di belakangnya tetap jalan.
@@ -61,7 +61,7 @@ Setelah server berjalan, `labagent.exe` dibuat sekali, lalu `install.ps1 -Server
 Tunnel membuat dashboard bisa dibuka dari mana saja tanpa membuka port di router. `cloudflared` berjalan di server Linux dan membuat koneksi keluar ke Cloudflare (HTTPS dari Cloudflare).
 
 **Agent lewat tunnel atau LAN.** Secara bawaan server menolak `/api/agent/*` (404) untuk permintaan yang datang lewat Cloudflare (`block_agent_via_tunnel = true`). Supaya PC tidak harus satu LAN dengan server, setel `block_agent_via_tunnel = false` di `config.toml`, hapus aturan `path: ^/api/agent` dari `config.yml` cloudflared, lalu pasang agent dengan `-ServerUrl https://lab.contoh.com`. Syaratnya:
-- Agent **v1.4.0 ke atas**. Agent lama ditolak Cloudflare (error 1010) karena memakai User-Agent bawaan Python.
+- Agent **v1.2.0 ke atas**. Agent lama ditolak Cloudflare (error 1010) karena memakai User-Agent bawaan Python.
 - Hostname itu **tidak** boleh di belakang Cloudflare Access, atau jalur `/api/agent` harus dikecualikan; agent tidak bisa login Access.
 - Satu-satunya pengaman jalur agent adalah `agent_token`; biarkan panjang dan acak (bawaan 32 karakter). Siapa pun yang memegang token bisa mendaftarkan PC palsu dan mengirim screenshot palsu, tetapi tidak bisa mengendalikan PC lain.
 - PC yang sudah terpasang dengan alamat LAN tetap memakai alamat itu sampai dipasang ulang dengan `-ServerUrl` baru. Kedua jalur bisa dipakai bersamaan.
@@ -117,7 +117,7 @@ Isi kunci publik di `server/config.toml` (`update_public_key = "..."`), restart 
 Tiap rilis:
 ```
 agent\deploy\build.ps1
-python agent\tools\release.py sign agent\deploy\labagent.exe --key rilis.key --version 1.3.0
+python agent\tools\release.py sign agent\deploy\labagent.exe --key rilis.key --version 1.2.0
 ```
 Di dashboard, bagian "Pembaruan agent": pilih `labagent.exe` dan `labagent.exe.release.json`, klik Unggah. Tiap PC menampilkan versi agent dan "menunggu pembaruan" sampai memakai rilis aktif.
 
@@ -127,7 +127,7 @@ Pembaruan berjalan lewat jalur yang sama dengan agent (LAN, atau tunnel bila dii
 
 ## Nama PC
 - Tombol **Nama**: nama tampilan di dashboard saja (tidak mengubah Windows).
-- Tombol **Nama Windows**: mengganti nama komputer Windows sungguhan. Server menawarkan permintaan itu ke pembantu SYSTEM di PC (butuh agent v1.3.0 ke atas dengan pembantu berjalan), yang memanggil `SetComputerNameExW`. Nama baru berlaku **setelah PC restart** (bisa dipilih restart otomatis). Aturan nama: maks 15 huruf/angka/tanda `-`, tidak boleh angka semua, disimpan huruf besar.
+- Tombol **Nama Windows**: mengganti nama komputer Windows sungguhan. Server menawarkan permintaan itu ke pembantu SYSTEM di PC (butuh agent v1.2.0 ke atas dengan pembantu berjalan), yang memanggil `SetComputerNameExW`. Nama baru berlaku **setelah PC restart** (bisa dipilih restart otomatis). Aturan nama: maks 15 huruf/angka/tanda `-`, tidak boleh angka semua, disimpan huruf besar.
 - Setelah restart PC melapor dengan nama baru dan tampil sebagai entri baru; nama tampilan, override kunci, dan log entri lama dipindahkan otomatis. Bila gagal, dashboard menampilkan galatnya dan permintaan tidak diulang otomatis (kirim ulang dari tombol yang sama).
 - PC yang tergabung domain (AD) tidak dianjurkan: nama lokal berbeda dari nama di domain.
 

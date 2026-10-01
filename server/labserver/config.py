@@ -27,7 +27,7 @@ warn_seconds = 300             # client menampilkan peringatan sekian detik sebe
 update_public_key = ""
 
 # Keamanan akses online (Cloudflare Tunnel)
-block_agent_via_tunnel = true  # tolak /api/agent/* jika datang lewat Cloudflare; false = agent boleh lewat tunnel (butuh agent v1.4.0+)
+block_agent_via_tunnel = true  # tolak /api/agent/* jika datang lewat Cloudflare; false = agent boleh lewat tunnel (butuh agent v1.2.0+)
 max_login_failures = 5         # salah password sebanyak ini dari satu IP ...
 login_block_seconds = 300      # ... memblokir IP itu selama sekian detik
 """
