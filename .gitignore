@@ -1,0 +1,65 @@
+# Aturan diwariskan dari .gitignore WEBSITE lama (sebelum dipecah per folder)
+# === Python ===
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# === Node ===
+node_modules/
+dist/
+dist-ssr/
+.svelte-kit/
+.vite/
+.next/
+*.local
+
+# === Logs & runtime state ===
+logs/
+*.log
+flask_session/
+*_sessions/
+smaalbayan_sessions/
+
+# === Secrets / kredensial ===
+.env
+.env.*
+!.env.example
+*.env
+**/cert.pem
+**/*.pem
+**/*credentials*.json
+**/*.credentials.json
+
+# === Database & data pengguna (data asli, tidak masuk git) ===
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# === .NET (window-overlay/OverlayLock) ===
+publish/
+*.user
+
+# === OS / editor ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Lab Control: kunci rilis privat dan rilis agent yang diunggah
+*.key
+server/releases/
+server/screenshots/
+agent/deploy/install.conf
