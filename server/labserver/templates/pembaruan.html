@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Pembaruan agent{% endblock %}
+{% block content %}
+<div class="page-head"><h4>Pembaruan agent</h4></div>
+<div class="widget-box card">
+    <p id="rel-status">Memuat…</p>
+    <p class="text-muted">Bangun <code>labagent.exe</code>, tanda tangani di komputer admin
+        (<code>python tools/release.py sign labagent.exe --key rilis.key --version X.Y.Z</code>), lalu pilih
+        kedua berkasnya. Semua PC memasang rilis ini sendiri; PC yang sedang mati memasangnya saat menyala.</p>
+    <div class="row g-3">
+        <div class="col-md-6"><label class="form-label" for="rel-exe">labagent.exe</label>
+            <input class="form-control" type="file" id="rel-exe" accept=".exe"></div>
+        <div class="col-md-6"><label class="form-label" for="rel-json">labagent.exe.release.json</label>
+            <input class="form-control" type="file" id="rel-json" accept=".json"></div>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center mt-3">
+        <button class="btn btn-primary" id="rel-upload">Unggah rilis</button>
+        <button class="btn btn-outline-danger" id="rel-stop">Hentikan distribusi</button>
+        <span class="text-muted" id="rel-msg"></span>
+    </div>
+</div>
+<div class="widget-box card">
+    <h5 class="mb-3">Versi agent per PC</h5>
+    <div class="table-responsive"><table class="table table-hover mb-0">
+        <thead><tr><th>PC</th><th>Versi</th><th>Status</th></tr></thead>
+        <tbody id="builds"></tbody>
+    </table></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function refresh() {
+  try {
+    const [r, data] = await Promise.all([api("/api/release"), api("/api/pcs")]);
+    $("#rel-status").textContent = !r.signing_enabled
+      ? "Unggah dimatikan: isi update_public_key di config.toml server, lalu restart server."
+      : r.release
+        ? `Rilis aktif: v${r.release.version} (${(r.release.size / 1048576).toFixed(1)} MB, diunggah ${dateTime(r.release.uploaded)}). ` +
+          `${r.pcs_current} dari ${r.pcs_total} PC sudah memakainya.`
+        : "Belum ada rilis. Agent tidak diperbarui.";
+    $("#builds").innerHTML = data.pcs.map((pc) => {
+      const state = !pc.version ? `<span class="badge badge-light-dark">tidak diketahui</span>`
+        : !r.release ? "" : pc.exe_sha === r.release.sha256 ? `<span class="badge badge-light-success">terbaru</span>`
+        : `<span class="badge badge-light-warning">menunggu pembaruan</span>`;
+      return `<tr><td><span class="dot ${pc.online ? "on" : ""}"></span><a href="/pc/${encodeURIComponent(pc.id)}">${esc(pc.name)}</a></td>` +
+        `<td>${pc.version ? "v" + esc(pc.version) : ""}</td><td>${state}</td></tr>`;
+    }).join("") || `<tr><td colspan="3" class="text-muted">Belum ada PC.</td></tr>`;
+    setErr("");
+  } catch (e) { setErr("Server tidak terjangkau: " + e.message); }
+}
+$("#rel-upload").onclick = async () => {
+  const msg = $("#rel-msg"), exe = $("#rel-exe").files[0], sig = $("#rel-json").files[0];
+  if (!exe || !sig) { msg.textContent = "Pilih exe dan berkas .release.json."; return; }
+  let manifest;
+  try { manifest = JSON.parse(await sig.text()); } catch (e) { msg.textContent = "Berkas tanda tangan bukan JSON."; return; }
+  if (!confirm(`Unggah v${manifest.version}? Semua PC akan memperbarui agent secara otomatis.`)) return;
+  msg.textContent = "Mengunggah…";
+  try {
+    const q = new URLSearchParams({ version: manifest.version, signature: manifest.signature });
+    const res = await fetch("/api/release?" + q, {
+      method: "POST", body: exe,
+      headers: { "Content-Type": "application/octet-stream", "X-Lab-Admin": "1" },
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    msg.textContent = "Rilis aktif ✓"; $("#rel-exe").value = ""; $("#rel-json").value = ""; refresh();
+  } catch (e) { msg.textContent = "Gagal: " + e.message; }
+};
+$("#rel-stop").onclick = async () => {
+  if (!confirm("Hentikan distribusi rilis? PC yang belum memperbarui tidak akan memperbarui.")) return;
+  try { await api("/api/release", "DELETE"); $("#rel-msg").textContent = ""; refresh(); }
+  catch (e) { $("#rel-msg").textContent = "Gagal: " + e.message; }
+};
+refresh(); setInterval(refresh, 10000);
+</script>
+{% endblock %}

@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}{{ pc_id }}{% endblock %}
+{% block content %}
+<div class="page-head">
+    <a href="/" class="btn btn-light-dark">{{ icon("arrow-left") }}Dashboard</a>
+    <h4 id="pc-name"><span class="dot"></span>{{ pc_id }}</h4>
+</div>
+<div id="missing" class="alert alert-warning" hidden>Komputer ini tidak terdaftar (mungkin sudah dihapus atau berganti nama). <a href="/">Kembali ke dashboard</a>.</div>
+
+<div class="row" id="detail" hidden>
+    <div class="col-lg-7 mb-4">
+        <div class="shot-large" id="shot"></div>
+        <div class="text-muted small mt-2" id="shot-note"></div>
+    </div>
+    <div class="col-lg-5 mb-4">
+        <div class="widget-box card">
+            <table class="info-table w-100"><tbody id="info"></tbody></table>
+        </div>
+        <div class="widget-box card">
+            <div class="d-flex flex-wrap gap-2" id="actions"></div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="widget-box card">
+            <h5 class="mb-3">Log aktivitas</h5>
+            <div class="log" id="log"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const PC_ID = {{ pc_id|tojson }};
+let shownShot = null, actionsHtml = "";
+
+function row(label, value) { return value ? `<tr><td>${label}</td><td>${value}</td></tr>` : ""; }
+
+function render(pc, data) {
+  const id = esc(pc.id);
+  $("#pc-name").innerHTML = `<span class="dot ${pc.online ? "on" : ""}"></span>${esc(pc.name)}`;
+  document.title = `${pc.name} · ${data.lab_name}`;
+
+  const box = $("#shot");
+  if (pc.shot) {
+    if (shownShot !== pc.shot) {
+      shownShot = pc.shot;
+      const next = new Image();
+      next.alt = "Layar " + pc.name;
+      next.onload = () => box.replaceChildren(next);
+      next.src = shotUrl(pc);
+    }
+    $("#shot-note").textContent = "Screenshot " + dateTime(pc.shot);
+  } else {
+    shownShot = null;
+    box.innerHTML = !pc.online ? `${ICON.off}<span>Komputer offline</span>`
+      : pc.locked ? `${ICON.lock}<span>Layar terkunci</span>` : `${ICON.monitor}<span>Belum ada screenshot</span>`;
+    $("#shot-note").textContent = "";
+  }
+
+  const rel = data.release, stale = rel && pc.version && pc.exe_sha !== rel.sha256;
+  $("#info").innerHTML =
+    row("Status", `<span class="badge ${pc.online ? "badge-light-success" : "badge-light-dark"}">${pc.online ? "Online" : "Offline"}</span>` +
+      (pc.online ? "" : ` terakhir ${dateTime(pc.last_seen)}`)) +
+    row("Kunci", `<span class="badge ${pc.locked ? "badge-light-danger" : "badge-light-success"}">${pc.locked ? "Terkunci" : "Terbuka"}</span> ` +
+      esc(lockStatus(pc).split(" · ").slice(1).join(" · "))) +
+    row("Nama Windows", id) +
+    row("Alamat IP", esc(pc.ip)) +
+    row("User", pc.online ? esc(pc.user) : "") +
+    row("Aplikasi aktif", pc.online ? esc(pc.app) : "") +
+    row("Judul jendela", pc.online ? esc(pc.title) : "") +
+    row("Idle", pc.online ? dur(pc.idle) : "") +
+    row("Uptime", pc.online ? dur(pc.uptime) : "") +
+    row("Memori terpakai", pc.online && pc.mem != null ? pc.mem + "%" : "") +
+    row("Agent", pc.version ? "v" + esc(pc.version) + (stale ? ` · <b>menunggu pembaruan ke v${esc(rel.version)}</b>` : "") : "") +
+    row("Ganti nama", esc(renameText(pc))) +
+    row("Terdaftar", dateTime(pc.first_seen));
+
+  const html = `
+    <div class="dropdown"><button class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown">${ICON.lock}Kunci</button>
+      <ul class="dropdown-menu">${durationItems("lock", pc.id)}</ul></div>
+    <div class="dropdown"><button class="btn btn-success dropdown-toggle" data-bs-toggle="dropdown">${ICON.unlock}Buka</button>
+      <ul class="dropdown-menu">${durationItems("unlock", pc.id)}</ul></div>
+    ${pc.override ? `<button class="btn btn-outline-primary" data-clear="${id}">Ikut jadwal</button>` : ""}
+    <button class="btn btn-outline-primary" data-msg="${id}" data-label="${esc(pc.name)}">${ICON.message}Pesan</button>
+    <button class="btn btn-outline-dark" data-rename="${id}" data-name="${esc(pc.name === pc.id ? "" : pc.name)}">Nama tampilan</button>
+    <button class="btn btn-outline-dark" data-wname="${id}" data-current="${esc(pc.rename ? pc.rename.name : "")}">Nama Windows</button>
+    <button class="btn btn-outline-warning" data-cmd="restart" data-pc="${id}">Restart</button>
+    <button class="btn btn-outline-danger" data-cmd="shutdown" data-pc="${id}">${ICON.off}Matikan</button>
+    ${pc.online ? "" : `<button class="btn btn-outline-danger" data-delete="${id}">Hapus dari daftar</button>`}`;
+  if (html !== actionsHtml && !$("#actions .dropdown-menu.show")) { $("#actions").innerHTML = html; actionsHtml = html; }
+}
+
+async function refresh() {
+  let data;
+  try { data = await api("/api/pcs"); setErr(""); }
+  catch (e) { setErr("Server tidak terjangkau: " + e.message); return; }
+  const pc = data.pcs.find((p) => p.id === PC_ID);
+  $("#missing").hidden = !!pc; $("#detail").hidden = !pc;
+  if (pc) render(pc, data);
+}
+async function refreshLog() {
+  try {
+    const rows = await api("/api/events?limit=100&pc=" + encodeURIComponent(PC_ID));
+    $("#log").innerHTML = logHtml(rows) || `<span class="text-muted">Belum ada log.</span>`;
+  } catch (e) { /* refresh() melaporkan masalah koneksi */ }
+}
+document.addEventListener("lab:changed", () => { refresh(); refreshLog(); });
+refresh(); refreshLog();
+setInterval(refresh, 3000);
+setInterval(refreshLog, 5000);
+</script>
+{% endblock %}

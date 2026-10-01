@@ -339,3 +339,124 @@ def test_rename_result_needs_token_and_matching_request(client):
     rename_result(client, "LAB-99")                            # nama tidak cocok: diabaikan
     assert rename_check(client) == {"name": "LAB-03"}
     assert rename_result(client, "bad name").status_code == 400
+
+
+# --- halaman dashboard -------------------------------------------------------------
+PAGES = ["/", "/pc/PC-01", "/jadwal", "/log", "/pembaruan", "/pengaturan"]
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_pages_need_login_and_render_with_sidebar(client, path):
+    assert client.get(path).status_code == 401
+    page = client.get(path, headers=ADMIN)
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    assert "Lab Test" in html and all(f'href="{link}"' in html for link in ("/jadwal", "/log", "/pembaruan", "/pengaturan"))
+
+
+def test_static_assets_are_served_without_login(client):
+    for path in ("/static/lab.js", "/static/lab.css", "/static/vendor/src/bootstrap/css/bootstrap.min.css"):
+        assert client.get(path).status_code == 200, path
+
+
+def test_pc_page_escapes_id_in_script(client):
+    html = client.get("/pc/%3Cscript%3Ealert(1)", headers=ADMIN).get_data(as_text=True)
+    assert "<script>alert(1)" not in html and "\\u003cscript" in html
+
+
+# --- screenshot berkala ---------------------------------------------------------------
+JPEG = b"\xff\xd8\xff\xe0" + b"x" * 500
+
+
+def shot(client, host="PC-01", data=JPEG, headers=AGENT):
+    return client.post(f"/api/agent/screenshot?host={host}", data=data, headers={**headers, "Content-Type": "image/jpeg"})
+
+
+def pc(client, pc_id="PC-01"):
+    return next(p for p in client.get("/api/pcs", headers=ADMIN).get_json()["pcs"] if p["id"] == pc_id)
+
+
+def test_poll_tells_agent_the_screenshot_interval(client):
+    assert poll(client).get_json()["screenshot_interval"] == 30
+    assert client.put("/api/settings", json={"screenshot_interval": 60}, headers=ADMIN).status_code == 200
+    assert poll(client).get_json()["screenshot_interval"] == 60
+    for bad in (3, -1, "x", None):
+        assert client.put("/api/settings", json={"screenshot_interval": bad}, headers=ADMIN).status_code == 400, bad
+
+
+def test_screenshot_upload_and_view(client):
+    poll(client)
+    assert pc(client)["shot"] is None
+    assert client.get("/api/pcs/PC-01/screenshot", headers=ADMIN).status_code == 404
+    assert shot(client).get_json()["stored"] is True
+    assert pc(client)["shot"] is not None
+    assert client.get("/api/pcs/PC-01/screenshot").status_code == 401
+    image = client.get("/api/pcs/PC-01/screenshot", headers=ADMIN)
+    assert image.status_code == 200 and image.data == JPEG and image.mimetype == "image/jpeg"
+
+
+def test_screenshot_upload_is_validated(client):
+    poll(client)
+    assert shot(client, headers={}).status_code == 403
+    assert shot(client, host="PC-99").status_code == 404           # PC belum terdaftar
+    assert shot(client, host="../x").status_code == 404
+    assert shot(client, data=b"<html>bukan gambar").status_code == 400
+    assert shot(client, data=JPEG + b"x" * (1536 * 1024)).status_code == 413
+    assert pc(client)["shot"] is None
+
+
+def test_screenshot_hidden_while_locked(client):
+    poll(client)
+    shot(client)
+    client.post("/api/pcs/PC-01/lock", json={}, headers=ADMIN)
+    assert pc(client)["shot"] is None
+    client.post("/api/pcs/PC-01/unlock", json={}, headers=ADMIN)
+    poll(client, locked=True)                                      # agent masih menampilkan layar kunci
+    assert pc(client)["shot"] is None
+    poll(client, locked=False)
+    assert pc(client)["shot"] is not None
+
+
+def test_turning_screenshots_off_deletes_them(client, tmp_path):
+    poll(client)
+    shot(client)
+    assert (tmp_path / "screenshots" / "PC-01.jpg").is_file()
+    client.put("/api/settings", json={"screenshot_interval": 0}, headers=ADMIN)
+    assert not (tmp_path / "screenshots" / "PC-01.jpg").exists() and pc(client)["shot"] is None
+    assert shot(client).get_json()["stored"] is False              # agent lama yang masih mengirim: dibuang
+    assert pc(client)["shot"] is None and poll(client).get_json()["screenshot_interval"] == 0
+
+
+def test_deleting_pc_removes_its_screenshot(client, tmp_path):
+    poll(client)
+    shot(client)
+    client.delete("/api/pcs/PC-01", headers=ADMIN)
+    assert not (tmp_path / "screenshots" / "PC-01.jpg").exists()
+
+
+# --- alamat IP dan agent lewat tunnel -------------------------------------------------
+def test_agent_reported_lan_ip_is_shown(client):
+    poll(client, lan_ip="192.168.1.77")
+    assert pc(client)["ip"] == "192.168.1.77"
+    for bad in ("bukan-ip", "127.0.0.1", "0.0.0.0", "<b>", None):
+        poll(client, lan_ip=bad)
+        assert pc(client)["ip"] == "127.0.0.1", bad                # alamat koneksi (klien tes)
+
+
+def test_agent_allowed_through_tunnel_when_configured(tmp_path):
+    cfg = Config(
+        lab_name="Lab Test", timezone="Asia/Jakarta", host="127.0.0.1", port=0,
+        db_path=str(tmp_path / "t.db"), admin_user="admin", admin_password="secret-pass",
+        agent_token="agent-token-1234567890", poll_interval=5, online_timeout=20,
+        command_ttl=120, event_retention_days=30, warn_seconds=300, block_agent_via_tunnel=False,
+    )
+    client = create_app(cfg).test_client()
+    assert poll_with(client, {**AGENT, **TUNNEL}).status_code == 200
+    assert poll_with(client, TUNNEL).status_code == 403            # token tetap wajib
+    assert pc(client)["ip"] == TUNNEL["Cf-Connecting-Ip"]          # tanpa lan_ip: alamat publik pengirim
+    assert client.get("/api/settings", headers=ADMIN).get_json()["agent_via_tunnel"] is True
+
+
+def poll_with(client, headers):
+    return client.post("/api/agent/poll", json={"host": "PC-01"}, headers=headers,
+                       environ_base={"REMOTE_ADDR": "127.0.0.1"})

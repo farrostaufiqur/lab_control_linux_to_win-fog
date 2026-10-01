@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS pcs (
     idle INTEGER, uptime INTEGER, mem INTEGER,
     locked INTEGER, version TEXT, exe_sha TEXT,
     override TEXT,
-    alias TEXT
+    alias TEXT,
+    shot_ts REAL                  -- waktu screenshot terakhir diterima
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,9 +59,9 @@ class Store:
         with self.tx() as db:
             db.executescript(SCHEMA)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(pcs)")}
-            for column in ("exe_sha", "alias"):  # database lama sebelum kolom ini ada
+            for column, kind in (("exe_sha", "TEXT"), ("alias", "TEXT"), ("shot_ts", "REAL")):  # database lama
                 if column not in columns:
-                    db.execute(f"ALTER TABLE pcs ADD COLUMN {column} TEXT")
+                    db.execute(f"ALTER TABLE pcs ADD COLUMN {column} {kind}")
         self._last_prune = 0.0
 
     @contextmanager
@@ -124,6 +125,14 @@ class Store:
     def set_alias(self, pc_id: str, alias: str | None) -> bool:
         with self.tx() as db:
             return db.execute("UPDATE pcs SET alias=? WHERE id=?", (alias, pc_id)).rowcount > 0
+
+    def set_shot(self, pc_id: str, ts: float | None) -> bool:
+        with self.tx() as db:
+            return db.execute("UPDATE pcs SET shot_ts=? WHERE id=?", (ts, pc_id)).rowcount > 0
+
+    def clear_shots(self) -> None:
+        with self.tx() as db:
+            db.execute("UPDATE pcs SET shot_ts=NULL")
 
     # ganti nama Windows -------------------------------------------------
     def request_rename(self, old: str, new: str, restart: bool, now: float):

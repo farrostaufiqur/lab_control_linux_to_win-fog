@@ -1,4 +1,5 @@
 import base64
+import ipaddress
 import json
 import os
 import re
@@ -8,7 +9,7 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, available_timezones
 
-from flask import Flask, Response, abort, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory
 
 from . import policy, release
 from .config import Config
@@ -21,6 +22,10 @@ MAX_EVENTS_PER_POLL = 200
 MAX_OVERRIDE_MINUTES = 60 * 24 * 7
 MAX_NOTICE_CHARS = 300
 MAX_NAME_CHARS = 40
+MAX_SHOT_BYTES = 1536 * 1024
+DEFAULT_SHOT_INTERVAL = 30
+MAX_SHOT_INTERVAL = 3600
+MIN_SHOT_INTERVAL = 5
 HOSTNAME_RE = re.compile(r"^(?!\d+$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?$")  # aturan nama NetBIOS 15 karakter
 ALL_ZONES = frozenset(available_timezones())
 
@@ -37,11 +42,16 @@ def _int(value, low=0, high=10**9):
 
 
 def create_app(cfg: Config) -> Flask:
-    app = Flask(__name__, static_folder=None)
+    app = Flask(__name__)   # /static (aset tampilan) terbuka tanpa login; tidak ada data di sana
     app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
     store = Store(cfg.db_path)
 
+    shots_dir = Path(cfg.db_path).parent / "screenshots"
+
     # helpers -------------------------------------------------------------
+    def shot_interval():
+        return _int(store.get_setting("screenshot_interval", DEFAULT_SHOT_INTERVAL), 0, MAX_SHOT_INTERVAL) or 0
+
     def timezone_name():
         name = store.get_setting("timezone", cfg.timezone)
         return name if name in ALL_ZONES else cfg.timezone
@@ -153,6 +163,8 @@ def create_app(cfg: Config) -> Flask:
             "agent_locked": bool(row["locked"]),
             "version": row["version"],
             "exe_sha": row["exe_sha"],
+            "shot": row["shot_ts"] if row["shot_ts"] and not row["locked"] and not state["locked"]
+                    and now - row["last_seen"] <= cfg.online_timeout else None,
             "rename": {"name": req["new"], "state": req["state"], "error": req["error"]} if req else None,
             "locked": state["locked"],
             "source": state["source"],
@@ -177,7 +189,7 @@ def create_app(cfg: Config) -> Flask:
         now = time.time()
 
         report = {
-            "ip": request.remote_addr,
+            "ip": _lan_ip(data.get("lan_ip")) or client_ip(),
             "user": _text(data.get("user"), 64),
             "app": _text(data.get("app"), 128),
             "title": _text(data.get("title"), 200),
@@ -224,9 +236,29 @@ def create_app(cfg: Config) -> Flask:
             "changes_in": state["changes_in"],
             "commands": commands,
             "poll_interval": cfg.poll_interval,
+            "screenshot_interval": shot_interval(),
             "warn_seconds": cfg.warn_seconds,
             "lab_name": cfg.lab_name,
         })
+
+    @app.post("/api/agent/screenshot")
+    def agent_screenshot():
+        agent_only()
+        host = request.args.get("host", "")
+        if not HOST_RE.match(host) or store.get_pc(host) is None:
+            abort(404)
+        request.max_content_length = MAX_SHOT_BYTES
+        data = request.get_data()
+        if not data.startswith(b"\xff\xd8\xff"):
+            abort(400, "bukan JPEG")
+        if not shot_interval():
+            return jsonify(ok=True, stored=False)   # fitur dimatikan admin: buang
+        shots_dir.mkdir(parents=True, exist_ok=True)
+        tmp = shots_dir / f"{host}.{secrets.token_hex(4)}.tmp"
+        tmp.write_bytes(data)
+        os.replace(tmp, shots_dir / f"{host}.jpg")
+        store.set_shot(host, time.time())
+        return jsonify(ok=True, stored=True)
 
     # rilis agent ---------------------------------------------------------
     releases_dir = Path(cfg.db_path).parent / "releases"
@@ -333,10 +365,65 @@ def create_app(cfg: Config) -> Flask:
         store.add_event("*", "info", "Admin menghentikan distribusi rilis agent")
         return jsonify(ok=True)
 
-    @app.get("/")
-    def dashboard():
+    # halaman -------------------------------------------------------------
+    def page(template, active, **extra):
         admin_only()
-        return send_from_directory(Path(__file__).parent / "static", "index.html")
+        return render_template(template, lab_name=cfg.lab_name, active=active, **extra)
+
+    @app.get("/")
+    def page_dashboard():
+        return page("dashboard.html", "dashboard")
+
+    @app.get("/pc/<pc_id>")
+    def page_pc(pc_id):
+        return page("pc.html", "dashboard", pc_id=pc_id)
+
+    @app.get("/jadwal")
+    def page_schedule():
+        return page("jadwal.html", "jadwal")
+
+    @app.get("/log")
+    def page_log():
+        return page("log.html", "log")
+
+    @app.get("/pembaruan")
+    def page_release():
+        return page("pembaruan.html", "pembaruan")
+
+    @app.get("/pengaturan")
+    def page_settings():
+        return page("pengaturan.html", "pengaturan")
+
+    @app.get("/api/settings")
+    def api_settings_get():
+        admin_only()
+        return jsonify({"screenshot_interval": shot_interval(),
+                        "agent_via_tunnel": not cfg.block_agent_via_tunnel,
+                        "restartable": bool(os.environ.get("INVOCATION_ID"))})
+
+    @app.put("/api/settings")
+    def api_settings_put():
+        admin_only()
+        seconds = (request.get_json(silent=True) or {}).get("screenshot_interval")
+        if type(seconds) is not int or not (seconds == 0 or MIN_SHOT_INTERVAL <= seconds <= MAX_SHOT_INTERVAL):
+            abort(400, f"screenshot_interval: 0 (mati) atau {MIN_SHOT_INTERVAL}-{MAX_SHOT_INTERVAL} detik")
+        store.set_setting("screenshot_interval", seconds)
+        if not seconds:                       # dimatikan: jangan simpan gambar lama
+            store.clear_shots()
+            for old in shots_dir.glob("*.jpg"):
+                old.unlink(missing_ok=True)
+        store.add_event("*", "info", f"Admin mengatur screenshot tiap {seconds} detik" if seconds else "Admin mematikan screenshot")
+        return jsonify(ok=True)
+
+    @app.get("/api/pcs/<pc_id>/screenshot")
+    def api_pc_screenshot(pc_id):
+        admin_only()
+        row = pc_or_404(pc_id)
+        if not row["shot_ts"] or not HOST_RE.match(pc_id):
+            abort(404)
+        response = send_from_directory(shots_dir, f"{pc_id}.jpg", mimetype="image/jpeg", max_age=0)
+        response.headers["Cache-Control"] = "private, max-age=300"   # URL memuat ?t=<waktu>, jadi aman di-cache
+        return response
 
     @app.get("/api/pcs")
     def api_pcs():
@@ -437,6 +524,8 @@ def create_app(cfg: Config) -> Flask:
     def api_pc_delete(pc_id):
         admin_only()
         store.delete_pc(pc_id)
+        if HOST_RE.match(pc_id):
+            (shots_dir / f"{pc_id}.jpg").unlink(missing_ok=True)
         return jsonify(ok=True)
 
     @app.post("/api/all/<action>")
@@ -567,6 +656,15 @@ def create_app(cfg: Config) -> Flask:
         return jsonify(error=getattr(err, "description", "error")), err.code
 
     return app
+
+
+def _lan_ip(value):
+    """Alamat LAN yang dilaporkan agent (lewat tunnel, alamat koneksi bukan alamat PC)."""
+    try:
+        ip = ipaddress.ip_address(str(value))
+    except ValueError:
+        return None
+    return None if ip.is_unspecified or ip.is_loopback else str(ip)
 
 
 def _suffix(override):

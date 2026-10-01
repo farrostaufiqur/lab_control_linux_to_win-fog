@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Pengaturan{% endblock %}
+{% block content %}
+<div class="page-head"><h4>Pengaturan</h4></div>
+<div class="widget-box card">
+    <h5 class="mb-2">Screenshot berkala</h5>
+    <p class="text-muted">Agent mengirim gambar layar selama PC tidak terkunci. Hanya gambar terakhir tiap PC yang disimpan;
+        mematikan fitur ini menghapus semua gambar di server.</p>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+        <select class="form-select w-auto" id="shot">
+            <option value="0">Mati</option><option value="10">Tiap 10 detik</option><option value="30">Tiap 30 detik</option>
+            <option value="60">Tiap 1 menit</option><option value="300">Tiap 5 menit</option>
+        </select>
+        <button class="btn btn-primary" id="shot-save">Simpan</button>
+        <span class="text-muted" id="shot-msg"></span>
+    </div>
+</div>
+<div class="widget-box card">
+    <h5 class="mb-2">Koneksi agent</h5>
+    <p class="mb-0" id="tunnel"></p>
+</div>
+<div class="widget-box card">
+    <h5 class="mb-2">Server</h5>
+    <p class="text-muted">Dashboard terputus beberapa detik. PC lab tetap terkunci/terbuka sesuai status terakhir.</p>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+        <button class="btn btn-outline-danger" id="restart-server">Restart server</button>
+        <span class="text-muted" id="restart-msg"></span>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function load() {
+  try {
+    const s = await api("/api/settings");
+    const sel = $("#shot");
+    if (![...sel.options].some((o) => Number(o.value) === s.screenshot_interval))
+      sel.add(new Option(`Tiap ${s.screenshot_interval} detik`, s.screenshot_interval));
+    sel.value = s.screenshot_interval;
+    $("#tunnel").textContent = s.agent_via_tunnel
+      ? "Agent boleh terhubung lewat Cloudflare Tunnel maupun LAN."
+      : "Agent hanya boleh terhubung lewat LAN (block_agent_via_tunnel = true di config.toml).";
+    $("#restart-server").disabled = !s.restartable;
+    if (!s.restartable) $("#restart-msg").textContent = "Server tidak berjalan di bawah systemd; restart manual.";
+    setErr("");
+  } catch (e) { setErr("Server tidak terjangkau: " + e.message); }
+}
+$("#shot-save").onclick = async () => {
+  const seconds = Number($("#shot").value);
+  if (!seconds && !confirm("Matikan screenshot dan hapus semua gambar yang tersimpan?")) return;
+  try { await api("/api/settings", "PUT", { screenshot_interval: seconds }); $("#shot-msg").textContent = "Tersimpan ✓"; }
+  catch (e) { $("#shot-msg").textContent = "Gagal: " + e.message; }
+  setTimeout(() => ($("#shot-msg").textContent = ""), 3000);
+};
+$("#restart-server").onclick = async () => {
+  if (!confirm("Restart server?")) return;
+  try {
+    await api("/api/server/restart", "POST");
+    $("#restart-msg").textContent = "Server dimulai ulang…";
+    const wait = setInterval(async () => {
+      try { await api("/api/settings"); clearInterval(wait); $("#restart-msg").textContent = "Server aktif kembali ✓"; } catch (e) {}
+    }, 2000);
+  } catch (e) { $("#restart-msg").textContent = "Gagal: " + e.message; }
+};
+load();
+</script>
+{% endblock %}

@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Jadwal sesi{% endblock %}
+{% block content %}
+<div class="page-head"><h4>Jadwal sesi</h4></div>
+<div class="widget-box card">
+    <p class="text-muted">Komputer terbuka hanya pada jam di bawah. Di luar itu layar dikunci otomatis.
+        Tiap baris bisa berulang setiap hari, setiap pekan pada hari yang dipilih, atau hanya pada satu tanggal.</p>
+    <div class="row g-3 align-items-center mb-3">
+        <div class="col-auto"><label class="col-form-label" for="tz">Zona waktu</label></div>
+        <div class="col-auto"><select class="form-select" id="tz"></select></div>
+        <div class="col-auto text-muted" id="tz-now"></div>
+    </div>
+    <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" id="sched-enabled">
+        <label class="form-check-label" for="sched-enabled">Aktifkan jadwal</label>
+    </div>
+    <div id="rules"></div>
+    <div class="d-flex flex-wrap gap-2 align-items-center mt-3">
+        <button class="btn btn-outline-primary" id="add-rule">+ Tambah jam</button>
+        <button class="btn btn-primary" id="save-sched">Simpan jadwal</button>
+        <span class="text-muted" id="sched-msg"></span>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const DAYS = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+const RULE_TYPES = [["weekly", "Setiap pekan (hari dipilih)"], ["daily", "Setiap hari"], ["once", "Tanggal tertentu"]];
+let zone = null;
+
+function ruleRow(rule = { type: "weekly", days: [0, 1, 2, 3, 4], start: "08:00", end: "16:00" }) {
+  const type = rule.type || "weekly", days = rule.days || [0, 1, 2, 3, 4];
+  const div = document.createElement("div");
+  div.className = "rule";
+  div.innerHTML =
+    `<select class="type form-select">${RULE_TYPES.map(([v, l]) => `<option value="${v}" ${v === type ? "selected" : ""}>${l}</option>`).join("")}</select>` +
+    `<span class="days">${DAYS.map((d, i) => `<label><input type="checkbox" class="form-check-input" value="${i}" ${days.includes(i) ? "checked" : ""}>${d}</label>`).join("")}</span>` +
+    `<input type="date" class="date form-control" value="${esc(rule.date || "")}">` +
+    `<input type="time" class="start form-control" value="${esc(rule.start)}"> – <input type="time" class="end form-control" value="${esc(rule.end)}">` +
+    `<button class="btn btn-outline-danger btn-sm">Hapus</button>`;
+  const sync = () => {
+    const kind = div.querySelector(".type").value;
+    div.querySelector(".days").style.display = kind === "weekly" ? "" : "none";
+    div.querySelector(".date").style.display = kind === "once" ? "" : "none";
+  };
+  div.querySelector(".type").onchange = sync;
+  div.querySelector("button").onclick = () => div.remove();
+  sync();
+  return div;
+}
+async function load() {
+  try {
+    const { current, zones } = await api("/api/timezones");
+    const first = ["Asia/Jakarta", "Asia/Makassar", "Asia/Jayapura", "Asia/Pontianak"];
+    const label = { "Asia/Jakarta": "WIB (Asia/Jakarta)", "Asia/Makassar": "WITA (Asia/Makassar)", "Asia/Jayapura": "WIT (Asia/Jayapura)" };
+    const option = (z) => `<option value="${esc(z)}">${esc(label[z] || z)}</option>`;
+    $("#tz").innerHTML = `<optgroup label="Indonesia">${first.filter((z) => zones.includes(z)).map(option).join("")}</optgroup>` +
+      `<optgroup label="Lainnya">${zones.filter((z) => !first.includes(z)).map(option).join("")}</optgroup>`;
+    $("#tz").value = zone = current;
+    const s = await api("/api/schedule");
+    $("#sched-enabled").checked = s.enabled;
+    $("#rules").replaceChildren(...s.rules.map(ruleRow));
+    setErr("");
+  } catch (e) { setErr("Server tidak terjangkau: " + e.message); }
+}
+function tick() {
+  if (zone) $("#tz-now").textContent = "Sekarang " + new Date().toLocaleTimeString("id-ID", { timeZone: zone }) + " di zona ini";
+}
+$("#tz").onchange = async () => {
+  if (await act("/api/timezone", "PUT", { timezone: $("#tz").value })) zone = $("#tz").value;
+  tick();
+};
+$("#add-rule").onclick = () => $("#rules").append(ruleRow());
+$("#save-sched").onclick = async () => {
+  const rules = [...document.querySelectorAll(".rule")].map((r) => {
+    const type = r.querySelector(".type").value;
+    const rule = { type, start: r.querySelector(".start").value, end: r.querySelector(".end").value };
+    if (type === "weekly") rule.days = [...r.querySelectorAll("input[type=checkbox]:checked")].map((c) => Number(c.value));
+    if (type === "once") rule.date = r.querySelector(".date").value;
+    return rule;
+  });
+  try {
+    await api("/api/schedule", "PUT", { enabled: $("#sched-enabled").checked, rules });
+    $("#sched-msg").textContent = "Tersimpan ✓";
+  } catch (e) { $("#sched-msg").textContent = "Gagal: " + e.message; }
+  setTimeout(() => ($("#sched-msg").textContent = ""), 3000);
+};
+load(); setInterval(tick, 1000);
+</script>
+{% endblock %}

@@ -35,6 +35,7 @@ class FakeServer:
                       "poll_interval": 5, "warn_seconds": 300, "lab_name": "Lab"}
         self.up = True
         self.bodies = []
+        self.uploads = []
 
     def __call__(self, url, body, token):
         if not self.up:
@@ -49,7 +50,9 @@ def env(tmp_path):
 
     def make(**overrides):
         cfg = AgentConfig(server_url="http://x", token="t", state_dir=str(tmp_path), **overrides)
-        return Agent(cfg, platform, post=server, clock=clock)
+        return Agent(cfg, platform, post=server, clock=clock,
+                     upload=lambda url, data, token: server.uploads.append((url, data, token)),
+                     lan_ip=lambda: "192.168.1.50")
 
     return clock, server, platform, make
 
@@ -210,3 +213,91 @@ def test_poll_reports_exe_sha_when_platform_knows_it():
                   post=lambda url, body, token: sent.append(body) or {"locked": False}, clock=Clock())
     assert agent.poll_once()
     assert sent[0]["exe_sha"] == "ab" * 32
+
+
+# --- screenshot berkala -------------------------------------------------------------
+def shots(platform, data=b"\xff\xd8\xffgambar"):
+    platform.grabs = 0
+
+    def screenshot():
+        platform.grabs += 1
+        if isinstance(data, Exception):
+            raise data
+        return data
+    platform.screenshot = screenshot
+
+
+def test_poll_reports_lan_ip(env):
+    _, server, _, make = env
+    make().poll_once()
+    assert server.bodies[-1]["lan_ip"] == "192.168.1.50"
+
+
+def test_screenshot_sent_at_interval_while_unlocked(env):
+    clock, server, platform, make = env
+    shots(platform)
+    server.reply["screenshot_interval"] = 30
+    agent = make()
+    assert agent.screenshot_once() is False          # belum pernah terhubung: tidak ada gambar
+    agent.poll_once()
+    assert agent.screenshot_once() is True
+    url, data, token = server.uploads[0]
+    assert url == "http://x/api/agent/screenshot?host=PC-01" and data.startswith(b"\xff\xd8") and token == "t"
+    assert agent.screenshot_once() is False          # belum waktunya
+    clock.now += 31
+    agent.poll_once()
+    assert agent.screenshot_once() is True and platform.grabs == 2
+
+
+def test_no_screenshot_when_locked_or_disabled(env):
+    clock, server, platform, make = env
+    shots(platform)
+    agent = make()
+    agent.poll_once()                                # server tidak mengirim screenshot_interval
+    assert agent.screenshot_once() is False and platform.grabs == 0
+    server.reply.update(screenshot_interval=10, locked=True)
+    agent.poll_once()
+    assert agent.screenshot_once() is False and platform.grabs == 0
+    server.reply["locked"] = False
+    agent.poll_once()
+    assert agent.screenshot_once() is True
+
+
+def test_no_screenshot_while_server_unreachable(env):
+    clock, server, platform, make = env
+    shots(platform)
+    server.reply["screenshot_interval"] = 10
+    agent = make()
+    agent.poll_once()
+    server.up = False
+    clock.now += 60
+    agent.poll_once()
+    assert agent.screenshot_once() is False and platform.grabs == 0
+
+
+def test_screenshot_failure_logged_once(env):
+    clock, server, platform, make = env
+    shots(platform, RuntimeError("layar tidak tersedia"))
+    server.reply["screenshot_interval"] = 10
+    agent = make()
+    agent.poll_once()
+    for _ in range(3):
+        assert agent.screenshot_once() is False
+        clock.now += 11
+        agent.poll_once()
+    details = [e["detail"] for body in server.bodies for e in body["events"]]
+    assert sum("Screenshot gagal" in d for d in details) == 1
+
+
+def test_platform_without_screenshot_support(env):
+    _, server, _, make = env
+    server.reply["screenshot_interval"] = 10
+    agent = make()
+    agent.poll_once()
+    assert agent.screenshot_once() is False and server.uploads == []
+
+
+def test_requests_carry_own_user_agent():
+    from labagent import VERSION
+    from labagent.core import agent_headers
+    assert agent_headers("t")["User-Agent"] == f"LabAgent/{VERSION}"

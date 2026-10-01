@@ -1,0 +1,119 @@
+{% from "_icons.html" import icon %}
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>{% block title %}Dashboard{% endblock %} · {{ lab_name }}</title>
+    <link rel="icon" href="{{ url_for('static', filename='logo.svg') }}">
+    {% set v = url_for('static', filename='vendor') %}
+    <link href="{{ v }}/layouts/vertical-light-menu/css/light/loader.css" rel="stylesheet">
+    <link href="{{ v }}/layouts/vertical-light-menu/css/dark/loader.css" rel="stylesheet">
+    <script src="{{ v }}/layouts/vertical-light-menu/loader.js"></script>
+    <link href="https://fonts.googleapis.com/css?family=Nunito:400,600,700" rel="stylesheet">
+    <link href="{{ v }}/src/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ v }}/layouts/vertical-light-menu/css/light/plugins.css" rel="stylesheet">
+    <link href="{{ v }}/layouts/vertical-light-menu/css/dark/plugins.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='lab.css') }}" rel="stylesheet">
+</head>
+<body class="layout-boxed">
+    <div id="load_screen"><div class="loader"><div class="loader-content">
+        <div class="spinner-grow align-self-center"></div>
+    </div></div></div>
+
+    <div class="header-container container-xxl">
+        <header class="header navbar navbar-expand-sm expand-header">
+            <a href="javascript:void(0);" class="sidebarCollapse">{{ icon("menu", "feather-menu") }}</a>
+            <span class="text-danger ms-3 small" id="err"></span>
+            <ul class="navbar-item flex-row ms-lg-auto ms-0">
+                <li class="nav-item theme-toggle-item">
+                    <a href="javascript:void(0);" class="nav-link theme-toggle" title="Tema terang/gelap">
+                        {{ icon("moon", "feather-moon dark-mode") }}{{ icon("sun", "feather-sun light-mode") }}
+                    </a>
+                </li>
+            </ul>
+        </header>
+    </div>
+
+    <div class="main-container" id="container">
+        <div class="overlay"></div>
+
+        <div class="sidebar-wrapper sidebar-theme">
+            <nav id="sidebar">
+                <div class="navbar-nav theme-brand flex-row text-center">
+                    <div class="nav-logo">
+                        <div class="nav-item theme-logo">
+                            <a href="/"><img src="{{ url_for('static', filename='logo.svg') }}" class="brand-logo" alt="logo"></a>
+                        </div>
+                        <div class="nav-item theme-text">
+                            <a href="/" class="nav-link"> {{ lab_name }} </a>
+                        </div>
+                    </div>
+                    <div class="nav-item sidebar-toggle">
+                        <div class="btn-toggle sidebarCollapse">{{ icon("chevrons-left", "feather-chevrons-left") }}</div>
+                    </div>
+                </div>
+                <div class="shadow-bottom"></div>
+                <ul class="list-unstyled menu-categories" id="accordionExample">
+                    {% for key, href, ico, label in [
+                        ("dashboard", "/", "monitor", "Dashboard"),
+                        ("jadwal", "/jadwal", "calendar", "Jadwal sesi"),
+                        ("log", "/log", "list", "Log aktivitas"),
+                        ("pembaruan", "/pembaruan", "download-cloud", "Pembaruan agent"),
+                        ("pengaturan", "/pengaturan", "settings", "Pengaturan"),
+                    ] %}
+                    <li class="menu {{ 'active' if active == key else '' }}">
+                        <a href="{{ href }}" aria-expanded="false" class="dropdown-toggle">
+                            <div>{{ icon(ico) }}<span>{{ label }}</span></div>
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </nav>
+        </div>
+
+        <div id="content" class="main-content">
+            <div class="layout-px-spacing">
+                <div class="middle-content container-xxl p-0">
+                    {% block content %}{% endblock %}
+                </div>
+            </div>
+            <div class="footer-wrapper">
+                <div class="footer-section f-section-1"><p>{{ lab_name }} · Lab Control</p></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="msgModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="msg-title">Kirim pesan</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Pesan tampil di layar PC yang sedang terkunci.</p>
+                <textarea class="form-control mb-3" id="msg-text" rows="3" maxlength="300" placeholder="Tulis pesan (maks. 300 karakter)"></textarea>
+                <label class="form-label" for="msg-min">Tampil selama</label>
+                <select class="form-select" id="msg-min">
+                    <option value="15">15 menit</option><option value="60" selected>1 jam</option>
+                    <option value="240">4 jam</option><option value="">Sampai dihapus</option>
+                </select>
+                <div class="small mt-2" id="msg-status"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline-danger me-auto" id="msg-clear">Hapus pesan</button>
+                <button class="btn btn-light-dark" data-bs-dismiss="modal">Tutup</button>
+                <button class="btn btn-primary" id="msg-send">Kirim</button>
+            </div>
+        </div></div>
+    </div>
+
+    <script src="{{ v }}/src/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ v }}/src/plugins/src/perfect-scrollbar/perfect-scrollbar.min.js"></script>
+    <script src="{{ v }}/src/plugins/src/mousetrap/mousetrap.min.js"></script>
+    <script src="{{ v }}/src/plugins/src/waves/waves.min.js"></script>
+    <script src="{{ v }}/layouts/vertical-light-menu/app.js"></script>
+    <script src="{{ url_for('static', filename='lab.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

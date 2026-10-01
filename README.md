@@ -4,7 +4,7 @@ Server Linux memantau PC Windows di lab, mengunci layar di luar jadwal sesi, dan
 
 ```
  PC Windows (labagent.exe)  ──HTTP tiap 5 dtk──►  Server Linux (Flask + SQLite)
-   - lapor status & log                              - dashboard web
+   - lapor status, log, screenshot                   - dashboard web
    - overlay kunci layar                             - jadwal + kunci manual
    - jalankan shutdown/restart                       - log aktivitas
 ```
@@ -12,7 +12,16 @@ Server Linux memantau PC Windows di lab, mengunci layar di luar jadwal sesi, dan
 Agent yang menghubungi server (bukan sebaliknya), jadi Windows Firewall tidak perlu diubah.
 
 ## Yang dipantau
-Online/offline, user login, aplikasi dan judul jendela aktif, idle, uptime, pemakaian RAM, status kunci, serta log: agent mulai, ganti aplikasi, kunci/buka, tombol shutdown/restart, perintah admin, koneksi terputus. Log dihapus otomatis setelah 30 hari. Judul jendela bisa berisi info pribadi. Matikan lewat `"log_titles": false`, dan beri tahu pengguna lab bahwa aktivitas dicatat.
+Online/offline, user login, aplikasi dan judul jendela aktif, idle, uptime, pemakaian RAM, status kunci, **screenshot berkala** (lihat bawah), serta log: agent mulai, ganti aplikasi, kunci/buka, tombol shutdown/restart, perintah admin, koneksi terputus. Log dihapus otomatis setelah 30 hari. Judul jendela bisa berisi info pribadi. Matikan lewat `"log_titles": false`, dan beri tahu pengguna lab bahwa aktivitas dan layar dicatat.
+
+## Dashboard
+Halaman terpisah dengan sidebar (tampilan dari template admin yang sama dengan admin fog.tf; mode terang/gelap):
+- **Dashboard**: dua kelompok, Online dan Offline. Tiap PC satu kartu berisi nama, alamat IP, pratinjau screenshot (bila tidak terkunci), tombol pesan, dan tombol gembok (gembok tertutup = kunci, gembok terbuka = buka kunci; pilih durasinya). Klik kartu untuk membuka detail. Tombol **Semua PC** untuk mengunci/membuka/mengirim pesan ke semua.
+- **Detail PC** (`/pc/<nama>`): screenshot besar, info lengkap, semua tombol (kunci, buka, ikut jadwal, pesan, nama tampilan, nama Windows, restart, matikan, hapus), dan log PC itu.
+- **Jadwal sesi**, **Log aktivitas**, **Pembaruan agent**, **Pengaturan** (interval screenshot, restart server).
+
+## Screenshot berkala
+Selama PC **tidak terkunci**, agent (v1.4.0 ke atas) mengirim gambar monitor utama tiap 30 detik (JPEG, lebar maks 1280). Interval diatur di halaman Pengaturan: mati, 10 dtk, 30 dtk, 1 mnt, 5 mnt. Server hanya menyimpan **gambar terakhir** tiap PC (`screenshots/` di samping database); tidak ada riwayat. Mematikan fitur menghapus semua gambar. Gambar tidak ditampilkan saat PC terkunci atau offline. Build agent kini butuh Pillow (`build.ps1` memasangnya).
 
 ## Cara kunci bekerja
 - Overlay layar penuh (semua monitor), selalu di atas, aplikasi di belakangnya tetap jalan.
@@ -51,7 +60,11 @@ Setelah server berjalan, `labagent.exe` dibuat sekali, lalu `install.ps1 -Server
 ## Dashboard online lewat Cloudflare Tunnel
 Tunnel membuat dashboard bisa dibuka dari mana saja tanpa membuka port di router. `cloudflared` berjalan di server Linux dan membuat koneksi keluar ke Cloudflare (HTTPS dari Cloudflare).
 
-**Agent tetap lewat LAN.** Server menolak `/api/agent/*` (404) untuk permintaan yang datang lewat Cloudflare (`block_agent_via_tunnel = true`), dan `cloudflared/config.example.yml` juga memblokirnya di sisi Cloudflare. Orang dari internet tidak bisa mencoba token agent.
+**Agent lewat tunnel atau LAN.** Secara bawaan server menolak `/api/agent/*` (404) untuk permintaan yang datang lewat Cloudflare (`block_agent_via_tunnel = true`). Supaya PC tidak harus satu LAN dengan server, setel `block_agent_via_tunnel = false` di `config.toml`, hapus aturan `path: ^/api/agent` dari `config.yml` cloudflared, lalu pasang agent dengan `-ServerUrl https://lab.contoh.com`. Syaratnya:
+- Agent **v1.4.0 ke atas**. Agent lama ditolak Cloudflare (error 1010) karena memakai User-Agent bawaan Python.
+- Hostname itu **tidak** boleh di belakang Cloudflare Access, atau jalur `/api/agent` harus dikecualikan; agent tidak bisa login Access.
+- Satu-satunya pengaman jalur agent adalah `agent_token`; biarkan panjang dan acak (bawaan 32 karakter). Siapa pun yang memegang token bisa mendaftarkan PC palsu dan mengirim screenshot palsu, tetapi tidak bisa mengendalikan PC lain.
+- PC yang sudah terpasang dengan alamat LAN tetap memakai alamat itu sampai dipasang ulang dengan `-ServerUrl` baru. Kedua jalur bisa dipakai bersamaan.
 
 Langkah (butuh akun Cloudflare gratis dan domain di Cloudflare):
 ```bash
@@ -110,7 +123,7 @@ Di dashboard, bagian "Pembaruan agent": pilih `labagent.exe` dan `labagent.exe.r
 
 Cara kerja: pembantu bertanya ke server tiap 60 detik; bila SHA-256 exe rilis berbeda dari exe terpasang, ia mengunduh (jeda acak 0-120 dtk agar PC tidak mengunduh serentak), memeriksa ukuran, SHA-256, tanda tangan, dan awalan `MZ`, lalu menjalankan skrip pergantian lewat tugas sekali-jalan `LabAgentUpdate`. Skrip menghentikan agent, menukar exe (yang lama jadi `labagent.bak`), menyalakan ulang, dan menunggu 30 detik agar pembantu baru menulis `helper.ok` berisi SHA-nya. Jika tidak muncul, exe lama dipulihkan dan rilis itu dicatat di `updater.json` supaya tidak dicoba terus. Keputusan pakai SHA-256, bukan nomor versi, jadi tidak ada loop karena salah label. Menghentikan distribusi tidak mengembalikan agent ke versi lama; unggah rilis yang lebih lama bila perlu.
 
-Pembaruan hanya berjalan lewat LAN (`/api/agent/*` tidak dibuka lewat tunnel). PC yang masih memakai agent lama (sebelum v1.2.0) harus dipasang ulang sekali dengan `install.ps1`; setelah itu pembaruan otomatis.
+Pembaruan berjalan lewat jalur yang sama dengan agent (LAN, atau tunnel bila diizinkan). PC yang masih memakai agent lama (sebelum v1.2.0) harus dipasang ulang sekali dengan `install.ps1`; setelah itu pembaruan otomatis.
 
 ## Nama PC
 - Tombol **Nama**: nama tampilan di dashboard saja (tidak mengubah Windows).

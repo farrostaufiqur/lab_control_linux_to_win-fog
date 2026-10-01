@@ -1,0 +1,58 @@
+/* Tambahan Lab Control di atas template admin */
+.page-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 24px 0 18px; }
+.page-head h4 { margin: 0 auto 0 0; font-weight: 700; }
+.group-title { font-size: 14px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: #888ea8; margin: 8px 0 14px; }
+.group-title .badge { margin-left: 6px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #bfc9d4; margin-right: 7px; flex: none; }
+.dot.on { background: #00ab55; }
+
+.pc-card { position: relative; border-radius: 10px; overflow: visible; transition: box-shadow .15s; }
+.pc-card:hover { box-shadow: 0 6px 22px rgba(67, 97, 238, .22); }
+.pc-card .shot-box { aspect-ratio: 16 / 9; background: #0e1726; border-radius: 10px 10px 0 0; overflow: hidden;
+                     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+                     color: #888ea8; font-size: 12px; }
+.pc-card .shot-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pc-card .shot-box svg { width: 30px; height: 30px; }
+.pc-card .shot-box.locked { color: #e7515a; }
+.pc-card.card .card-body, body.dark .pc-card.card .card-body { padding: 12px 14px; display: flex; align-items: center; gap: 8px; }
+.pc-card .who { flex: 1; min-width: 0; }
+.pc-card .who .name { font-weight: 700; font-size: 15px; display: flex; align-items: center; }
+.pc-card .who .name span.t, .pc-card .who .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-card .who .sub { font-size: 12px; color: #888ea8; }
+.pc-card .btn-icon, .pc-card .dropdown { position: relative; z-index: 2; }   /* di atas stretched-link */
+
+.btn-icon { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; display: inline-flex; align-items: center;
+            justify-content: center; background: #eaf1ff; color: #4361ee; flex: none; box-shadow: none; }
+.btn-icon:hover { background: #4361ee; color: #fff; }
+.btn-icon.is-locked { background: #fbeced; color: #e7515a; }
+.btn-icon.is-locked:hover { background: #e7515a; color: #fff; }
+.btn-icon svg { width: 18px; height: 18px; }
+body.dark .btn-icon { background: #1b2e4b; color: #6b8cff; }
+body.dark .btn-icon.is-locked { background: #2c1c2b; color: #e7515a; }
+body.dark .btn-icon:hover { color: #fff; }
+
+.shot-large { background: #0e1726; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; gap: 8px; color: #888ea8; }
+.shot-large img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.shot-large svg { width: 44px; height: 44px; }
+.info-table td { padding: 7px 4px; vertical-align: top; }
+.info-table td:first-child { color: #888ea8; width: 38%; white-space: nowrap; }
+.info-table td:last-child { word-break: break-word; }
+.btn svg { width: 16px; height: 16px; margin-right: 4px; vertical-align: -3px; }
+
+.log { max-height: 62vh; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+.log div { padding: 4px 0; border-bottom: 1px solid rgba(136, 142, 168, .2); }
+.log .t { color: #888ea8; margin-right: 10px; }
+.log .pc { font-weight: 700; margin-right: 10px; }
+.rule { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(136, 142, 168, .2); }
+.rule label { display: inline-flex; gap: 4px; align-items: center; margin: 0 4px 0 0; }
+.rule .form-select, .rule .form-control { width: auto; }
+.widget-box { padding: 20px; margin-bottom: 24px; }
+#sidebar .theme-brand .nav-logo { min-width: 0; flex: 1; }
+#sidebar .theme-brand div.theme-text { min-width: 0; }
+#sidebar .theme-brand div.theme-text a, body.dark #sidebar .theme-brand div.theme-text a { font-size: 18px !important; padding-left: .5rem; padding-right: 0; overflow: hidden;
+                                         text-overflow: ellipsis; white-space: nowrap; display: block; }
+#sidebar .theme-brand div.theme-logo img { width: 34px; }
+.pc-card:has(.dropdown-menu.show) { z-index: 20; }
+body.dark .info-table td:last-child, body.dark .pc-card .who .name, body.dark .log { color: #e0e6ed; }
+select.form-select.w-auto { min-width: 190px; padding-right: 2.5rem; }

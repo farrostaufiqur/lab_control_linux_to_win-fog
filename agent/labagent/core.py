@@ -6,8 +6,10 @@ module can be tested on any OS.
 import json
 import os
 import secrets
+import socket
 import threading
 import time
+import urllib.parse
 import urllib.request
 from collections import deque
 from dataclasses import dataclass
@@ -34,19 +36,38 @@ class View:
     notice: str = ""        # admin message shown on the lock screen
 
 
+def agent_headers(token: str, content_type: str = "application/json") -> dict:
+    # Cloudflare menolak User-Agent bawaan urllib ("Python-urllib", error 1010), jadi pakai nama sendiri.
+    return {"Content-Type": content_type, "X-Agent-Token": token, "User-Agent": f"LabAgent/{VERSION}"}
+
+
 def http_post_json(url: str, body: dict, token: str, timeout: float = 5.0) -> dict:
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json", "X-Agent-Token": token},
-    )
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=agent_headers(token))
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read())
 
 
+def http_post_bytes(url: str, data: bytes, token: str, timeout: float = 15.0) -> None:
+    request = urllib.request.Request(url, data=data, headers=agent_headers(token, "image/jpeg"))
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        response.read()
+
+
+def local_ip() -> str:
+    """Alamat LAN PC ini (antarmuka rute bawaan). UDP connect tidak mengirim paket apa pun."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))
+            return sock.getsockname()[0]
+    except OSError:
+        return ""
+
+
 class Agent:
-    def __init__(self, cfg: AgentConfig, platform, post=http_post_json, clock=time.time):
+    def __init__(self, cfg: AgentConfig, platform, post=http_post_json, clock=time.time,
+                 upload=http_post_bytes, lan_ip=local_ip):
         self.cfg, self.platform, self._post, self._clock = cfg, platform, post, clock
+        self._upload, self._lan_ip = upload, lan_ip
         self.host = platform.hostname()
         self.user = platform.username()
         self.exempt = self.user.lower() in cfg.exempt_users
@@ -67,6 +88,9 @@ class Agent:
         self._last_app: tuple[str, str] | None = None
         self._last_title_event = 0.0
         self._exe_sha_cache: str | None = None
+        self._shot_interval = 0.0          # detik; 0 = server belum meminta screenshot
+        self._next_shot = 0.0
+        self._shot_error = ""
 
         self._state_file = Path(cfg.state_dir) / "state.json"
         self.add_event("agent_start", f"Agent v{VERSION} dimulai, user {self.user}")
@@ -167,6 +191,7 @@ class Agent:
             "locked": locked,
             "version": VERSION,
             "exe_sha": self._exe_sha(),
+            "lan_ip": self._lan_ip(),
             "events": batch,
         }
         try:
@@ -186,10 +211,46 @@ class Agent:
             self._poll_interval = max(2.0, float(reply.get("poll_interval", 5)))
             self._lab_name = reply.get("lab_name", self._lab_name)
             self._warn_seconds = int(reply.get("warn_seconds", self._warn_seconds))
+            self._shot_interval = max(0.0, float(reply.get("screenshot_interval") or 0))
         self._save_state()
         for action in reply.get("commands", []):
             self.power(action)
         return True
+
+    # screenshot ----------------------------------------------------------
+    def screenshot_once(self) -> bool:
+        """Kirim satu gambar layar bila sudah waktunya. Tidak pernah saat layar terkunci atau server tak terjangkau."""
+        view, now = self.view(), self._clock()
+        if self._shot_interval <= 0 or view.locked or not view.connected or now < self._next_shot:
+            return False
+        self._next_shot = now + self._shot_interval
+        grab = getattr(self.platform, "screenshot", None)
+        if grab is None:
+            return False
+        try:
+            data = grab()
+        except Exception as exc:
+            if repr(exc) != self._shot_error:        # catat sekali per jenis galat, bukan tiap interval
+                self._shot_error = repr(exc)
+                self.add_event("info", f"Screenshot gagal: {exc!r}")
+            return False
+        if not data or self.view().locked:           # terkunci selagi mengambil gambar: buang
+            return False
+        self._shot_error = ""
+        url = self.cfg.server_url.rstrip("/") + "/api/agent/screenshot?host=" + urllib.parse.quote(self.host)
+        try:
+            self._upload(url, data, self.cfg.token)
+        except Exception:
+            return False
+        return True
+
+    def run_screenshots(self, stop: threading.Event):
+        """Utas terpisah supaya unggahan lambat tidak menunda pembaruan status kunci."""
+        while not stop.wait(1.0):
+            try:
+                self.screenshot_once()
+            except Exception:
+                pass
 
     def power(self, action: str):
         if action in ("shutdown", "restart"):

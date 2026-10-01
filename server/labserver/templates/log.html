@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Log aktivitas{% endblock %}
+{% block content %}
+<div class="page-head">
+    <h4>Log aktivitas</h4>
+    <select class="form-select w-auto" id="log-pc"><option value="">Semua PC</option></select>
+</div>
+<div class="widget-box card">
+    <div class="log" id="log"></div>
+    <button class="btn btn-outline-primary btn-sm mt-3" id="more" hidden>Muat yang lebih lama</button>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const PAGE = 200;
+let names = {}, older = [], oldest = null;
+
+async function loadPcs() {
+  try {
+    const { pcs } = await api("/api/pcs");
+    names = Object.fromEntries(pcs.map((p) => [p.id, p.name]));
+    const sel = $("#log-pc"), keep = sel.value;
+    sel.innerHTML = `<option value="">Semua PC</option>` +
+      pcs.map((p) => `<option value="${esc(p.id)}" ${p.id === keep ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  } catch (e) { setErr("Server tidak terjangkau: " + e.message); }
+}
+const query = (extra) => `/api/events?limit=${PAGE}&pc=${encodeURIComponent($("#log-pc").value)}${extra || ""}`;
+async function refresh() {
+  try {
+    const rows = await api(query());
+    if (!older.length) { oldest = rows.length ? rows[rows.length - 1].id : null; $("#more").hidden = rows.length < PAGE; }
+    $("#log").innerHTML = logHtml(rows.concat(older), names) || `<span class="text-muted">Belum ada log.</span>`;
+    setErr("");
+  } catch (e) { setErr("Server tidak terjangkau: " + e.message); }
+}
+$("#more").onclick = async () => {
+  if (oldest == null) return;
+  const rows = await api(query("&before=" + oldest)).catch(() => []);
+  older = older.concat(rows);
+  if (rows.length) oldest = rows[rows.length - 1].id;
+  $("#more").hidden = rows.length < PAGE;
+  refresh();
+};
+$("#log-pc").onchange = () => { older = []; refresh(); };
+loadPcs().then(refresh);
+setInterval(() => { if ($("#log").scrollTop === 0) refresh(); }, 5000);
+</script>
+{% endblock %}

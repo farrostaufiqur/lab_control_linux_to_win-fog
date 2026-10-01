@@ -53,6 +53,10 @@ class _MEMORYSTATUSEX(ctypes.Structure):
     ]
 
 
+SCREENSHOT_MAX_WIDTH = 1280
+SCREENSHOT_JPEG_QUALITY = 55
+
+
 class WindowsPlatform:
     """Implements the `platform` interface expected by labagent.core.Agent."""
 
@@ -86,6 +90,18 @@ class WindowsPlatform:
             return ""
         finally:
             kernel32.CloseHandle(handle)
+
+    def screenshot(self) -> bytes:
+        """Monitor utama sebagai JPEG kecil (lebar maks 1280) untuk pratinjau di dashboard."""
+        import io
+
+        from PIL import ImageGrab   # diimpor di sini agar mode --helper/--watch-usb tidak memuat Pillow
+
+        image = ImageGrab.grab()
+        image.thumbnail((SCREENSHOT_MAX_WIDTH, SCREENSHOT_MAX_WIDTH))
+        out = io.BytesIO()
+        image.convert("RGB").save(out, "JPEG", quality=SCREENSHOT_JPEG_QUALITY, optimize=True)
+        return out.getvalue()
 
     def idle_seconds(self) -> int:
         info = _LASTINPUTINFO(cbSize=ctypes.sizeof(_LASTINPUTINFO))

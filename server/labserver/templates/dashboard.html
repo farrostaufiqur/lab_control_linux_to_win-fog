@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+    <h4>Dashboard</h4>
+    <span class="text-muted" id="summary"></span>
+    <div class="dropdown">
+        <button class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">Semua PC</button>
+        <ul class="dropdown-menu dropdown-menu-end" id="all-menu"></ul>
+    </div>
+</div>
+
+<div class="group-title">Online <span class="badge badge-light-success" id="n-online">0</span></div>
+<div class="row" id="online"></div>
+<p class="text-muted" id="online-empty" hidden>Tidak ada komputer yang online.</p>
+
+<div class="group-title mt-3">Offline <span class="badge badge-light-dark" id="n-offline">0</span></div>
+<div class="row" id="offline"></div>
+<p class="text-muted" id="offline-empty" hidden>Tidak ada komputer yang offline.</p>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const COL = "col-xxl-3 col-lg-4 col-sm-6 col-12 mb-4";
+
+function cardHtml(pc) {
+  const id = esc(pc.id), sub = (pc.name !== pc.id ? id + " · " : "") + esc(pc.ip || "");
+  let preview = "";
+  if (pc.online) {
+    preview = pc.locked ? `<div class="shot-box locked">${ICON.lock}<span>Terkunci</span></div>`
+      : pc.shot ? `<div class="shot-box"><img alt="Layar ${id}"></div>`
+      : `<div class="shot-box">${ICON.monitor}<span>Belum ada screenshot</span></div>`;
+  }
+  return `<div class="card pc-card">
+    <a class="stretched-link" href="/pc/${encodeURIComponent(pc.id)}" aria-label="Detail ${esc(pc.name)}"></a>
+    ${preview}
+    <div class="card-body">
+      <div class="who">
+        <div class="name"><span class="dot ${pc.online ? "on" : ""}"></span><span class="t">${esc(pc.name)}</span></div>
+        <div class="sub">${sub}</div>
+        ${pc.online ? "" : `<div class="sub">Terakhir ${dateTime(pc.last_seen)}</div>`}
+      </div>
+      <button class="btn-icon" title="Kirim pesan" data-msg="${id}" data-label="${esc(pc.name)}">${ICON.message}</button>
+      <div class="dropdown">
+        <button class="btn-icon ${pc.locked ? "is-locked" : ""}" data-bs-toggle="dropdown" aria-expanded="false"
+                title="${pc.locked ? "Buka kunci" : "Kunci"}">${pc.locked ? ICON.unlock : ICON.lock}</button>
+        <ul class="dropdown-menu dropdown-menu-end">${durationItems(pc.locked ? "unlock" : "lock", pc.id, !!pc.override)}</ul>
+      </div>
+    </div>
+  </div>`;
+}
+
+function sync(container, pcs) {
+  const keep = new Set();
+  pcs.forEach((pc, i) => {
+    const html = cardHtml(pc);
+    keep.add(pc.id);
+    let el = [...container.children].find((c) => c.dataset.card === pc.id);
+    if (!el) { el = document.createElement("div"); el.className = COL; el.dataset.card = pc.id; container.append(el); }
+    if (el._html !== html && !el.querySelector(".dropdown-menu.show")) { el.innerHTML = html; el._html = html; el._shot = null; }
+    if (container.children[i] !== el) container.insertBefore(el, container.children[i]);
+    const img = el.querySelector(".shot-box img");
+    if (img && pc.shot && el._shot !== pc.shot) {      // muat dulu, baru tukar: tanpa kedip
+      el._shot = pc.shot;
+      const next = new Image();
+      next.onload = () => { img.src = next.src; };
+      next.src = shotUrl(pc);
+    }
+  });
+  [...container.children].forEach((el) => keep.has(el.dataset.card) || el.remove());
+}
+
+async function refresh() {
+  let data;
+  try { data = await api("/api/pcs"); setErr(""); }
+  catch (e) { setErr("Server tidak terjangkau: " + e.message); return; }
+  const online = data.pcs.filter((p) => p.online), offline = data.pcs.filter((p) => !p.online);
+  sync($("#online"), online); sync($("#offline"), offline);
+  $("#n-online").textContent = online.length; $("#n-offline").textContent = offline.length;
+  $("#online-empty").hidden = online.length > 0; $("#offline-empty").hidden = offline.length > 0;
+  $("#online-empty").textContent = data.pcs.length ? "Tidak ada komputer yang online." : "Belum ada PC. Pasang agent di client Windows.";
+  $("#summary").textContent = `${online.filter((p) => p.locked).length} dari ${online.length} PC online terkunci` +
+    (data.global_override ? ` · semua PC di${data.global_override.mode === "lock" ? "kunci" : "buka"} manual` : "");
+}
+
+$("#all-menu").innerHTML = durationItems("lock", "*") + `<li><hr class="dropdown-divider"></li>` + durationItems("unlock", "*", true) +
+  `<li><a class="dropdown-item" href="#" data-msg="*">Pesan ke semua</a></li>`;
+document.addEventListener("lab:changed", refresh);
+refresh();
+setInterval(refresh, 3000);
+</script>
+{% endblock %}

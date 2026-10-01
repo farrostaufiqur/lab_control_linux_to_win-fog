@@ -6,7 +6,7 @@ import urllib.request
 from pathlib import Path
 
 from . import VERSION, config, helper
-from .core import Agent, http_post_json
+from .core import Agent, agent_headers, http_post_json
 
 
 def watch_usb(cfg: config.AgentConfig, config_path: Path) -> None:
@@ -39,7 +39,7 @@ def run_helper(cfg: config.AgentConfig, config_path: Path) -> None:
         return http_post_json(base, {"host": host, "sha": own_sha, "version": VERSION}, cfg.token, timeout=10)
 
     def download(dest: str) -> None:
-        request = urllib.request.Request(base + "/file", headers={"X-Agent-Token": cfg.token})
+        request = urllib.request.Request(base + "/file", headers=agent_headers(cfg.token))
         with urllib.request.urlopen(request, timeout=120) as response, open(dest, "wb") as out:
             shutil.copyfileobj(response, out)
 
@@ -84,6 +84,7 @@ def main():
     agent = Agent(cfg, winapi.WindowsPlatform())
     stop = threading.Event()
     threading.Thread(target=agent.run_forever, args=(stop,), daemon=True).start()
+    threading.Thread(target=agent.run_screenshots, args=(stop,), daemon=True).start()
     try:
         Overlay(agent, winapi, cfg).run()
     finally:
