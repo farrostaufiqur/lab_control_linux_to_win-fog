@@ -57,7 +57,7 @@ Hari: 0 = Senin ... 6 = Minggu. Bila dashboard di belakang Cloudflare Access, ta
 
 ## Aturan kerja
 - Minta konfirmasi sebelum: mengunci/membuka semua PC, shutdown/restart, mengubah jadwal, menghapus PC.
-- Jangan menampilkan atau meng-commit `config.toml`, password dashboard, `agent_token`, atau nama file pemulihan.
+- Jangan meng-commit `config.toml`, password dashboard, `agent_token`, atau nama file pemulihan. Menampilkannya di chat boleh bila pemilik meminta.
 - Jangan mengubah `agent_token` atau `block_agent_via_tunnel` tanpa persetujuan; `/api/agent` sekarang terbuka lewat tunnel dan hanya dilindungi token.
 - Kode Windows tidak bisa diuji di Linux; jangan menyatakan berhasil sebelum dicoba di satu PC Windows.
 
