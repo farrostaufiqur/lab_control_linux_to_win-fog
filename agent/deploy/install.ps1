@@ -2,12 +2,12 @@
 <#
   Memasang agent di PC client. Cara termudah: klik dua kali install.cmd (meminta hak Administrator sendiri).
   Atau dari PowerShell Administrator:
-    .\install.ps1 -ServerUrl http://192.168.1.10:8080 -Token <agent_token>
-  Parameter yang tidak diberikan dibaca dari install.conf di folder ini (baris Kunci=Nilai). Bila ServerUrl/Token
-  tetap kosong, skrip menanyakannya lalu menyimpannya ke install.conf supaya PC berikutnya tinggal klik.
+    .\install.ps1 -Token <agent_token>
+  Alamat server sudah ditanam di labagent.exe saat build (build.conf). Parameter yang tidak diberikan dibaca
+  dari install.conf di folder ini (baris Kunci=Nilai). Bila Token tetap kosong, skrip menanyakannya lalu
+  menyimpannya ke install.conf supaya PC berikutnya tinggal klik.
 #>
 param(
-    [string]$ServerUrl = "",
     [string]$Token = "",
     [string]$Exe = "$PSScriptRoot\labagent.exe",
     [string[]]$ExemptUsers = @("administrator", "admin", "labadmin"),
@@ -25,23 +25,20 @@ if (Test-Path $confPath) {
         if ($line -match '^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$') { $conf[$Matches[1]] = $Matches[2] }
     }
 }
-if (-not $ServerUrl)       { $ServerUrl = [string]$conf["ServerUrl"] }
 if (-not $Token)           { $Token = [string]$conf["Token"] }
 if (-not $KillFileName)    { $KillFileName = [string]$conf["KillFileName"] }
 if (-not $UpdatePublicKey) { $UpdatePublicKey = [string]$conf["UpdatePublicKey"] }
 if (-not $PSBoundParameters.ContainsKey("OfflineBootPolicy") -and $conf["OfflineBootPolicy"] -in "lock", "unlock") {
     $OfflineBootPolicy = $conf["OfflineBootPolicy"]
 }
-if (-not $ServerUrl -or -not $Token) {
+if (-not $Token) {
     Write-Host "Pengaturan belum ada. Isi sekali; disimpan ke install.conf untuk PC berikutnya."
-    if (-not $ServerUrl) { $ServerUrl = (Read-Host "Alamat server (mis. http://192.168.1.10:8080 atau https://lab.contoh.com)").Trim() }
     if (-not $Token)     { $Token = (Read-Host "Token agent (agent_token di config.toml server)").Trim() }
     if (-not $KillFileName)    { $KillFileName = (Read-Host "Nama file pemulihan darurat (Enter = tidak dipakai)").Trim() }
     if (-not $UpdatePublicKey) { $UpdatePublicKey = (Read-Host "Kunci publik pembaruan, 64 hex (Enter = tidak dipakai)").Trim() }
-    @("ServerUrl=$ServerUrl", "Token=$Token", "KillFileName=$KillFileName", "UpdatePublicKey=$UpdatePublicKey",
+    @("Token=$Token", "KillFileName=$KillFileName", "UpdatePublicKey=$UpdatePublicKey",
       "OfflineBootPolicy=$OfflineBootPolicy") | Set-Content -Path $confPath -Encoding ASCII
 }
-if ($ServerUrl -notmatch '^https?://') { throw "ServerUrl harus diawali http:// atau https://" }
 if (-not $Token) { throw "Token wajib diisi" }
 
 if (-not (Test-Path $Exe)) { throw "labagent.exe tidak ditemukan di $Exe (jalankan build.ps1 dulu)" }
@@ -54,7 +51,6 @@ Get-Process labagent -ErrorAction SilentlyContinue | Stop-Process -Force
 Copy-Item $Exe "$dir\labagent.exe" -Force
 
 $config = [ordered]@{
-    server_url          = $ServerUrl
     token               = $Token
     offline_boot_policy = $OfflineBootPolicy
     exempt_users        = $ExemptUsers
@@ -72,12 +68,22 @@ if ($KillFileName) {
 $config | ConvertTo-Json | Set-Content -Path "$dir\config.json" -Encoding UTF8
 icacls $data /grant "BUILTIN\Users:(OI)(CI)M" | Out-Null
 
-# Cek apakah server terjangkau dari PC ini
-try {
-    Invoke-RestMethod -Uri ($ServerUrl.TrimEnd("/") + "/healthz") -TimeoutSec 5 | Out-Null
-    Write-Host "Server terjangkau: $ServerUrl"
-} catch {
-    Write-Warning "Server TIDAK terjangkau dari PC ini ($ServerUrl). Cek alamat IP, port 8080 di firewall server, dan kabel/jaringan. Agent tetap dipasang."
+# Cek alamat server yang ditanam di exe (daftarnya dibaca dari build.conf bila ikut tersalin)
+$buildConf = Join-Path $PSScriptRoot "build.conf"
+$reachable = $false
+if (Test-Path $buildConf) {
+    foreach ($line in Get-Content $buildConf) {
+        if ($line -notmatch '^\s*ServerUrl\s*=\s*(.+?)\s*$') { continue }
+        $url = $Matches[1].TrimEnd("/")
+        try {
+            Invoke-RestMethod -Uri "$url/healthz" -TimeoutSec 5 | Out-Null
+            Write-Host "Server terjangkau: $url"
+            $reachable = $true
+        } catch {
+            Write-Host "Server tidak terjangkau: $url"
+        }
+    }
+    if (-not $reachable) { Write-Warning "Tidak ada alamat server yang terjangkau dari PC ini. Cek jaringan. Agent tetap dipasang." }
 }
 
 # Sembunyikan "Switch user" di layar Ctrl+Alt+Del

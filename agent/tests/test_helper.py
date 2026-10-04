@@ -33,7 +33,7 @@ class World:
     def __init__(self, tmp_path, key=PUBLIC, manifest=None, exe=NEW_EXE):
         self.install, self.state = tmp_path / "install", tmp_path / "state"
         self.install.mkdir()
-        self.cfg = AgentConfig(server_url="http://x", token="t", state_dir=str(self.state), update_public_key=key)
+        self.cfg = AgentConfig(server_urls=("http://x",), token="t", state_dir=str(self.state), update_public_key=key)
         self.manifest, self.exe = manifest, exe
         self.applied, self.launched, self.downloads = [], [], 0
         self.loaded = True

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import VERSION
 from .config import AgentConfig
+from .servers import Servers
 
 MAX_QUEUED_EVENTS = 1000
 EVENTS_PER_POLL = 100
@@ -68,6 +69,7 @@ class Agent:
                  upload=http_post_bytes, lan_ip=local_ip):
         self.cfg, self.platform, self._post, self._clock = cfg, platform, post, clock
         self._upload, self._lan_ip = upload, lan_ip
+        self.servers = Servers(cfg.server_urls)
         self.host = platform.hostname()
         self.user = platform.username()
         self.exempt = self.user.lower() in cfg.exempt_users
@@ -195,7 +197,7 @@ class Agent:
             "events": batch,
         }
         try:
-            reply = self._post(self.cfg.server_url.rstrip("/") + "/api/agent/poll", body, self.cfg.token)
+            reply = self.servers.call(lambda base: self._post(base + "/api/agent/poll", body, self.cfg.token))
         except Exception:
             return False
         now = self._clock()
@@ -237,9 +239,9 @@ class Agent:
         if not data or self.view().locked:           # terkunci selagi mengambil gambar: buang
             return False
         self._shot_error = ""
-        url = self.cfg.server_url.rstrip("/") + "/api/agent/screenshot?host=" + urllib.parse.quote(self.host)
+        path = "/api/agent/screenshot?host=" + urllib.parse.quote(self.host)
         try:
-            self._upload(url, data, self.cfg.token)
+            self.servers.call(lambda base: self._upload(base + path, data, self.cfg.token))
         except Exception:
             return False
         return True

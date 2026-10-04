@@ -3,11 +3,13 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import servers
+
 
 @dataclass(frozen=True)
 class AgentConfig:
-    server_url: str
     token: str
+    server_urls: tuple = ()                 # kosong di config.json = pakai alamat yang ditanam saat build
     offline_boot_policy: str = "lock"       # what to do at startup if the server can't be reached: lock | unlock
     boot_grace_seconds: int = 60            # only used when offline_boot_policy == "unlock"
     log_titles: bool = True                 # include window titles in activity log
@@ -30,11 +32,19 @@ def load(path: Path | None = None) -> AgentConfig:
     raw = json.loads(path.read_text(encoding="utf-8-sig"))
     known = AgentConfig.__dataclass_fields__
     values = {k: v for k, v in raw.items() if k in known}
+    if isinstance(raw.get("server_url"), str):
+        values["server_urls"] = (raw["server_url"],)
+    if "server_urls" in values:
+        values["server_urls"] = tuple(str(u) for u in values["server_urls"])
+    else:
+        values.setdefault("server_urls", tuple(servers.BUILT_IN))
     if "exempt_users" in values:
         values["exempt_users"] = tuple(str(u).lower() for u in values["exempt_users"])
     cfg = AgentConfig(**values)
-    if not cfg.server_url.startswith(("http://", "https://")):
-        raise ValueError("server_url harus diawali http:// atau https://")
+    if not cfg.server_urls:
+        raise ValueError("alamat server kosong: isi deploy\\build.conf lalu build ulang")
+    if any(not u.startswith(("http://", "https://")) for u in cfg.server_urls):
+        raise ValueError("alamat server harus diawali http:// atau https://")
     if cfg.offline_boot_policy not in ("lock", "unlock"):
         raise ValueError("offline_boot_policy harus 'lock' atau 'unlock'")
     key = cfg.update_public_key

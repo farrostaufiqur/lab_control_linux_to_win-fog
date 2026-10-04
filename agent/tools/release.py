@@ -1,7 +1,7 @@
 """Alat admin untuk rilis agent (jalankan di komputer admin, bukan di server).
 
   python tools/release.py keygen  rilis.key        # sekali saja; cetak kunci publik
-  python tools/release.py sign    dist/labagent.exe --key rilis.key --version 1.2.0
+  python tools/release.py sign    dist/labagent.exe --key rilis.key --version 1.0.1
 
 `keygen` menulis kunci privat ke berkas (jangan di-commit, jangan disimpan di server) dan
 mencetak kunci publik untuk `install.ps1 -UpdatePublicKey` / `update_public_key` di config

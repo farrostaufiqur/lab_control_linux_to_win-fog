@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import VERSION, config, helper
 from .core import Agent, agent_headers, http_post_json
+from .servers import Servers
 
 
 def watch_usb(cfg: config.AgentConfig, config_path: Path) -> None:
@@ -31,21 +32,22 @@ def run_helper(cfg: config.AgentConfig, config_path: Path) -> None:
     guard = winapi.acquire_single_instance("Global\\LabAgentHelperSingleton")
     if guard is None:
         return
-    base = cfg.server_url.rstrip("/") + "/api/agent/release"
+    servers = Servers(cfg.server_urls)
     own_sha = winapi.own_exe_sha256()
     host = winapi.WindowsPlatform().hostname()
 
     def fetch_manifest():
-        return http_post_json(base, {"host": host, "sha": own_sha, "version": VERSION}, cfg.token, timeout=10)
+        body = {"host": host, "sha": own_sha, "version": VERSION}
+        return servers.call(lambda base: http_post_json(base + "/api/agent/release", body, cfg.token, timeout=10))
 
-    def download(dest: str) -> None:
-        request = urllib.request.Request(base + "/file", headers=agent_headers(cfg.token))
+    def download(dest: str) -> None:   # dari alamat yang baru saja menjawab fetch_manifest
+        request = urllib.request.Request(servers.active + "/api/agent/release/file", headers=agent_headers(cfg.token))
         with urllib.request.urlopen(request, timeout=120) as response, open(dest, "wb") as out:
             shutil.copyfileobj(response, out)
 
     def report_rename(name: str, ok: bool, error: str) -> None:
-        http_post_json(cfg.server_url.rstrip("/") + "/api/agent/rename-result",
-                       {"host": host, "name": name, "ok": ok, "error": error}, cfg.token, timeout=10)
+        body = {"host": host, "name": name, "ok": ok, "error": error}
+        servers.call(lambda base: http_post_json(base + "/api/agent/rename-result", body, cfg.token, timeout=10))
 
     ports = helper.Ports(own_sha=own_sha, fetch_manifest=fetch_manifest, download=download,
                          apply_policy=winapi.apply_user_policies, launch_update=winapi.launch_update,
