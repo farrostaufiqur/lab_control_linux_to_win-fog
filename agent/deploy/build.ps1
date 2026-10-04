@@ -1,5 +1,5 @@
 # Bangun labagent.exe (di satu PC Windows yang punya Python 3.11+ dengan tkinter). Cara termudah: klik dua kali build.cmd.
-# Alamat server ditanam ke exe dari build.conf (satu baris ServerUrl=... per alamat, LAN dan/atau internet).
+# Bila agent\rilis.key ada, exe langsung ditandatangani (hasil: labagent.exe.release.json). Alamat server ditanam ke exe dari build.conf (satu baris ServerUrl=... per alamat, LAN dan/atau internet).
 $ErrorActionPreference = "Stop"
 $confPath = Join-Path $PSScriptRoot "build.conf"
 $urls = @()
@@ -31,3 +31,13 @@ py -m PyInstaller --noconsole --onefile --name labagent --hidden-import PIL.Imag
 if ($LASTEXITCODE) { throw "PyInstaller gagal" }
 Copy-Item dist\labagent.exe deploy\labagent.exe -Force
 Write-Host "Selesai: deploy\labagent.exe"
+
+# Tanda tangan rilis otomatis bila kunci privat ada di folder agent (dibuat sekali: py tools\release.py keygen rilis.key)
+if (Test-Path "rilis.key") {
+    $version = (py -c "from labagent import VERSION; print(VERSION)").Trim()
+    py tools\release.py sign deploy\labagent.exe --key rilis.key --version $version
+    if ($LASTEXITCODE) { throw "Penandatanganan gagal" }
+    Write-Host "Siap diunggah di dashboard (Pembaruan agent): deploy\labagent.exe dan deploy\labagent.exe.release.json"
+} else {
+    Write-Warning "rilis.key tidak ada di folder agent: exe tidak ditandatangani, jadi tidak bisa dipakai untuk pembaruan lewat jaringan (pemasangan manual tetap bisa)."
+}

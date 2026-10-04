@@ -17,7 +17,7 @@ Perangkat lunak manajemen lab komputer milik sekolah: server Linux (`server/`, F
 - `agent/labagent/winapi.py`, `overlay.py`: bagian Windows
 - `agent/labagent/updater.py`, `helper.py`, `ed25519.py`: pembaruan otomatis dan pembantu SYSTEM (lihat bawah); logika murni, efek samping disuntikkan lewat `helper.Ports`
 - `server/labserver/release.py`, `ed25519.py`: penyimpanan rilis; `ed25519.py` salinan identik dari agent (dicek tes), format pesan tanda tangan harus sama dengan `updater.release_message`
-- `agent/tools/release.py`: keygen/sign rilis, dijalankan di komputer admin
+- `agent/tools/release.py`: keygen/sign rilis, dijalankan di komputer admin. `deploy/build.ps1` memanggil `sign` otomatis bila `agent/rilis.key` ada (versi dari `labagent.VERSION`), menghasilkan `deploy/labagent.exe.release.json`
 - `agent/labagent/killswitch.py`: pemulihan darurat admin (lihat bawah); logikanya murni, bagian Windows ada di `winapi.py`
 
 ## Pemulihan darurat (pencopotan lewat drive)

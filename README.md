@@ -130,11 +130,8 @@ python agent\tools\release.py keygen rilis.key      # cetak kunci publik; simpan
 ```
 Isi kunci publik di `server/config.toml` (`update_public_key = "..."`), restart server, dan pasang agent dengan `-UpdatePublicKey <kunci publik>`.
 
-Tiap rilis:
-```
-agent\deploy\build.ps1
-python agent\tools\release.py sign agent\deploy\labagent.exe --key rilis.key --version 1.2.0
-```
+Tiap rilis: naikkan `VERSION` di `agent\labagent\__init__.py`, taruh `rilis.key` di folder `agent`, lalu klik dua kali `build.cmd`. Bila `rilis.key` ada, build otomatis menandatangani exe dan menghasilkan `deploy\labagent.exe.release.json` (berisi versi, SHA-256, ukuran, dan tanda tangan; keygen hanya membuat kunci). Penandatanganan manual tetap bisa: `py tools\release.py sign deploy\labagent.exe --key rilis.key --version X.Y.Z`.
+
 Di dashboard, bagian "Pembaruan agent": pilih `labagent.exe` dan `labagent.exe.release.json`, klik Unggah. Tiap PC menampilkan versi agent dan "menunggu pembaruan" sampai memakai rilis aktif.
 
 Cara kerja: pembantu bertanya ke server tiap 60 detik; bila SHA-256 exe rilis berbeda dari exe terpasang, ia mengunduh (jeda acak 0-120 dtk agar PC tidak mengunduh serentak), memeriksa ukuran, SHA-256, tanda tangan, dan awalan `MZ`, lalu menjalankan skrip pergantian lewat tugas sekali-jalan `LabAgentUpdate`. Skrip menghentikan agent, menukar exe (yang lama jadi `labagent.bak`), menyalakan ulang, dan menunggu 30 detik agar pembantu baru menulis `helper.ok` berisi SHA-nya. Jika tidak muncul, exe lama dipulihkan dan rilis itu dicatat di `updater.json` supaya tidak dicoba terus. Keputusan pakai SHA-256, bukan nomor versi, jadi tidak ada loop karena salah label. Menghentikan distribusi tidak mengembalikan agent ke versi lama; unggah rilis yang lebih lama bila perlu.
