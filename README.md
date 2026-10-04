@@ -21,7 +21,7 @@ Halaman terpisah dengan sidebar (tampilan dari template admin yang sama dengan a
 - **Jadwal sesi**, **Log aktivitas**, **Pembaruan agent**, **Pengaturan** (interval screenshot, restart server).
 
 ## Screenshot berkala
-Selama PC **tidak terkunci**, agent (v1.2.0 ke atas) mengirim gambar monitor utama tiap 30 detik (JPEG, lebar maks 1280). Interval diatur di halaman Pengaturan: mati, 10 dtk, 30 dtk, 1 mnt, 5 mnt. Server hanya menyimpan **gambar terakhir** tiap PC (`screenshots/` di samping database); tidak ada riwayat. Mematikan fitur menghapus semua gambar. Gambar tidak ditampilkan saat PC terkunci atau offline. Build agent kini butuh Pillow (`build.ps1` memasangnya).
+Selama PC **tidak terkunci**, agent (v1.2.0 ke atas) mengirim gambar monitor utama tiap 5 detik, sama dengan penyegaran log aktivitas (JPEG, lebar maks 1280). Interval diatur di halaman Pengaturan: mati, 5 dtk, 10 dtk, 30 dtk, 1 mnt, 5 mnt. Server hanya menyimpan **gambar terakhir** tiap PC (`screenshots/` di samping database); tidak ada riwayat. Mematikan fitur menghapus semua gambar. Gambar tidak ditampilkan saat PC terkunci atau offline. Build agent kini butuh Pillow (`build.ps1` memasangnya).
 
 ## Cara kunci bekerja
 - Overlay layar penuh (semua monitor), selalu di atas, aplikasi di belakangnya tetap jalan.
