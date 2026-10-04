@@ -44,6 +44,6 @@ $("#more").onclick = async () => {
 };
 $("#log-pc").onchange = () => { older = []; refresh(); };
 loadPcs().then(refresh);
-setInterval(() => { if ($("#log").scrollTop === 0) refresh(); }, 5000);
+setInterval(() => { if ($("#log").scrollTop === 0) refresh(); }, 10000);
 </script>
 {% endblock %}

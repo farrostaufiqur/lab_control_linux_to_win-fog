@@ -377,7 +377,7 @@ def pc(client, pc_id="PC-01"):
 
 
 def test_poll_tells_agent_the_screenshot_interval(client):
-    assert poll(client).get_json()["screenshot_interval"] == 5
+    assert poll(client).get_json()["screenshot_interval"] == 10
     assert client.put("/api/settings", json={"screenshot_interval": 60}, headers=ADMIN).status_code == 200
     assert poll(client).get_json()["screenshot_interval"] == 60
     for bad in (3, -1, "x", None):

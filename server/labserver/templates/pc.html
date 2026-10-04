@@ -109,6 +109,6 @@ async function refreshLog() {
 document.addEventListener("lab:changed", () => { refresh(); refreshLog(); });
 refresh(); refreshLog();
 setInterval(refresh, 3000);
-setInterval(refreshLog, 5000);
+setInterval(refreshLog, 10000);
 </script>
 {% endblock %}
