@@ -20,6 +20,10 @@ async function api(path, method = "GET", body) {
     headers: { "Content-Type": "application/json", "X-Lab-Admin": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401) {          // sesi habis: kembali ke halaman login
+    location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+    throw new Error("Sesi berakhir, silakan login lagi");
+  }
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   return res.json();
 }

@@ -347,7 +347,8 @@ PAGES = ["/", "/pc/PC-01", "/jadwal", "/log", "/pembaruan", "/pengaturan"]
 
 @pytest.mark.parametrize("path", PAGES)
 def test_pages_need_login_and_render_with_sidebar(client, path):
-    assert client.get(path).status_code == 401
+    redirect = client.get(path)
+    assert redirect.status_code == 302 and redirect.headers["Location"].startswith("/login?next=")
     page = client.get(path, headers=ADMIN)
     assert page.status_code == 200
     html = page.get_data(as_text=True)
@@ -460,3 +461,82 @@ def test_agent_allowed_through_tunnel_when_configured(tmp_path):
 def poll_with(client, headers):
     return client.post("/api/agent/poll", json={"host": "PC-01"}, headers=headers,
                        environ_base={"REMOTE_ADDR": "127.0.0.1"})
+
+
+# --- halaman login (form + sesi, bukan prompt Basic) ---------------------------------
+def login(client, password="secret-pass", user="admin", **extra):
+    return client.post("/login", data={"username": user, "password": password, **extra})
+
+
+def test_login_page_is_public_and_has_no_basic_challenge(client):
+    page = client.get("/login")
+    assert page.status_code == 200 and 'name="password"' in page.get_data(as_text=True)
+    assert "WWW-Authenticate" not in page.headers
+    assert "WWW-Authenticate" not in client.get("/api/pcs").headers     # tidak memunculkan prompt browser
+    assert "WWW-Authenticate" not in client.get("/").headers
+
+
+def test_login_sets_session_that_works_for_pages_and_api(client):
+    assert login(client).status_code == 302
+    assert client.get("/").status_code == 200
+    assert client.get("/api/pcs").status_code == 200
+    cookie = client.get_cookie("labsession")
+    assert cookie is not None and cookie.http_only and cookie.same_site == "Lax"
+    assert client.post("/api/all/clear", headers={"X-Lab-Admin": "1"}).status_code == 200
+    assert client.post("/api/all/clear").status_code == 400            # sesi pun tetap butuh header anti-CSRF
+
+
+def test_wrong_login_rejected_and_rate_limited(client):
+    for _ in range(5):
+        assert login(client, password="salah").status_code == 401
+    assert login(client, password="salah").status_code == 429
+    assert login(client).status_code == 429                              # IP diblokir, walau password benar
+    assert client.get("/api/pcs").status_code in (401, 429)
+
+
+def test_login_redirects_to_next_but_never_off_site(client):
+    assert login(client, next="/pc/PC-01").headers["Location"] == "/pc/PC-01"
+    for evil in ("https://evil.example", "//evil.example", "/\\evil.example", "pc"):
+        assert login(client, next=evil).headers["Location"] == "/", evil
+
+
+def test_unauthenticated_page_redirect_keeps_target(client):
+    assert client.get("/pc/PC-01").headers["Location"] == "/login?next=/pc/PC-01"
+
+
+def test_logout_ends_session(client):
+    login(client)
+    assert client.get("/logout").status_code == 302
+    assert client.get("/api/pcs").status_code == 401
+
+
+def test_session_dies_when_admin_password_changes(tmp_path):
+    def make(password):
+        cfg = Config(
+            lab_name="Lab Test", timezone="Asia/Jakarta", host="127.0.0.1", port=0,
+            db_path=str(tmp_path / "t.db"), admin_user="admin", admin_password=password,
+            agent_token="agent-token-1234567890", poll_interval=5, online_timeout=20,
+            command_ttl=120, event_retention_days=30, warn_seconds=300,
+        )
+        return create_app(cfg).test_client()
+    first = make("secret-pass")
+    login(first)
+    assert first.get("/api/pcs").status_code == 200
+    restarted = make("secret-pass")                       # kunci sesi tersimpan: restart tidak mengeluarkan siapa pun
+    restarted.set_cookie("labsession", first.get_cookie("labsession").value)
+    assert restarted.get("/api/pcs").status_code == 200
+    changed = make("password-baru-123")
+    changed.set_cookie("labsession", first.get_cookie("labsession").value)
+    assert changed.get("/api/pcs").status_code == 401
+
+
+def test_session_cookie_secure_only_over_https(client):
+    login(client)
+    assert not client.get_cookie("labsession").secure
+    other = client.application.test_client()
+    other.post("/login", data={"username": "admin", "password": "secret-pass"}, headers={"X-Forwarded-Proto": "https"})
+    assert other.get_cookie("labsession", ).secure
+
+
+def test_basic_auth_still_works_for_scripts(client):
+    assert client.get("/api/pcs", headers=ADMIN).status_code == 200

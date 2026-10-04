@@ -9,7 +9,7 @@ Perangkat lunak manajemen lab komputer milik sekolah: server Linux (`server/`, F
 
 ## Struktur
 - `server/labserver/policy.py`: keputusan kunci (per-PC > semua PC > jadwal), fungsi murni
-- `server/labserver/app.py`: API agent (`/api/agent/poll`, token), API admin (Basic auth + header `X-Lab-Admin: 1`), dan halaman dashboard
+- `server/labserver/app.py`: API agent (`/api/agent/poll`, token), API admin, dan halaman dashboard. Login: form `/login` + cookie sesi `labsession` (12 jam, HttpOnly, SameSite=Lax, Secure bila HTTPS; kunci sesi di tabel settings `session_secret`; mengganti `admin_password` mengakhiri semua sesi). Skrip/curl tetap bisa memakai Basic auth. Semua permintaan non-GET, termasuk yang bersesi, wajib header `X-Lab-Admin: 1`. Tidak ada tantangan `WWW-Authenticate`, jadi browser tidak memunculkan prompt
 - `server/labserver/templates/`: satu halaman per menu sidebar (`dashboard`, `pc`, `jadwal`, `log`, `pembaruan`, `pengaturan`) di atas `base.html`; JS/CSS bersama di `static/lab.js`, `static/lab.css`
 - `server/labserver/static/vendor/`: aset template admin (salinan dari `WEBSITE/fog/admin/html`, sama dengan admin fog.tf); jangan diedit selain dua tambalan kecil (`?.` pada `.navbar-logo`, impor highlight dibuang). `/static` terbuka tanpa login
 - `agent/labagent/core.py`: logika agent tanpa ketergantungan Windows

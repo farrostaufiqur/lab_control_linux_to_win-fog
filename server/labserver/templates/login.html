@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>Login · {{ lab_name }}</title>
+    <link rel="icon" href="{{ url_for('static', filename='logo.svg') }}">
+    {% set v = url_for('static', filename='vendor') %}
+    <link href="{{ v }}/layouts/vertical-light-menu/css/light/loader.css" rel="stylesheet">
+    <link href="{{ v }}/layouts/vertical-light-menu/css/dark/loader.css" rel="stylesheet">
+    <script src="{{ v }}/layouts/vertical-light-menu/loader.js"></script>
+    <link href="https://fonts.googleapis.com/css?family=Nunito:400,600,700" rel="stylesheet">
+    <link href="{{ v }}/src/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ v }}/layouts/vertical-light-menu/css/light/plugins.css" rel="stylesheet">
+    <link href="{{ v }}/layouts/vertical-light-menu/css/dark/plugins.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='lab.css') }}" rel="stylesheet">
+</head>
+<body class="layout-boxed">
+    <div id="load_screen"><div class="loader"><div class="loader-content">
+        <div class="spinner-grow align-self-center"></div>
+    </div></div></div>
+
+    <div class="container">
+        <div class="row justify-content-center" style="min-height: 100vh; align-items: center;">
+            <div class="col-12 col-sm-8 col-md-5 col-lg-4">
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <div class="text-center mb-3">
+                            <img src="{{ url_for('static', filename='logo.svg') }}" alt="" width="44" height="44">
+                            <h5 class="card-title mt-2 mb-0">Login {{ lab_name }}</h5>
+                        </div>
+                        {% if error %}<div class="alert alert-danger py-2" role="alert">{{ error }}</div>{% endif %}
+                        <form method="post" action="/login">
+                            <input type="hidden" name="next" value="{{ next }}">
+                            <div class="mb-3">
+                                <label class="form-label" for="username">Username</label>
+                                <input type="text" id="username" name="username" class="form-control" autocomplete="username" required autofocus>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="password">Password</label>
+                                <input type="password" id="password" name="password" class="form-control" autocomplete="current-password" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Masuk</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

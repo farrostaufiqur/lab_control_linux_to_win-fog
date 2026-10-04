@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -9,7 +11,12 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, available_timezones
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory
+from datetime import timedelta
+from urllib.parse import quote
+
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, session
+from flask.sessions import SecureCookieSessionInterface
+from werkzeug.exceptions import HTTPException
 
 from . import policy, release
 from .config import Config
@@ -22,6 +29,7 @@ MAX_EVENTS_PER_POLL = 200
 MAX_OVERRIDE_MINUTES = 60 * 24 * 7
 MAX_NOTICE_CHARS = 300
 MAX_NAME_CHARS = 40
+SESSION_HOURS = 12
 MAX_SHOT_BYTES = 1536 * 1024
 DEFAULT_SHOT_INTERVAL = 10
 MAX_SHOT_INTERVAL = 3600
@@ -45,6 +53,28 @@ def create_app(cfg: Config) -> Flask:
     app = Flask(__name__)   # /static (aset tampilan) terbuka tanpa login; tidak ada data di sana
     app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
     store = Store(cfg.db_path)
+
+    # sesi login (cookie bertanda tangan); kunci dibuat sekali dan disimpan, jadi sesi bertahan saat restart
+    secret = store.get_setting("session_secret", None)
+    if not secret:
+        secret = secrets.token_hex(32)
+        store.set_setting("session_secret", secret)
+    app.secret_key = secret
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_NAME="labsession",
+                      PERMANENT_SESSION_LIFETIME=timedelta(hours=SESSION_HOURS))
+
+    class LabSessionInterface(SecureCookieSessionInterface):
+        def get_cookie_secure(self, app):   # Secure hanya bila pengunjung memakai HTTPS (tunnel); LAN memakai HTTP
+            return request.is_secure or "https" in request.headers.get("Cf-Visitor", "") \
+                or request.headers.get("X-Forwarded-Proto", "") == "https"
+    app.session_interface = LabSessionInterface()
+
+    def password_fingerprint():   # mengganti password di config.toml mengakhiri semua sesi lama
+        return hmac.new(secret.encode(), cfg.admin_password.encode(), hashlib.sha256).hexdigest()[:32]
+
+    def session_valid():
+        value = session.get("lab")
+        return isinstance(value, str) and hmac.compare_digest(value, password_fingerprint())
 
     shots_dir = Path(cfg.db_path).parent / "screenshots"
 
@@ -108,7 +138,18 @@ def create_app(cfg: Config) -> Flask:
                 for key in [k for k, (_, until) in failures.items() if until <= now][:500]:
                     failures.pop(key, None)
 
+    def csrf_header_required():
+        # Header khusus memaksa preflight CORS, jadi situs lain tidak bisa memakai sesi/kredensial admin
+        if request.method != "GET" and request.headers.get("X-Lab-Admin") != "1":
+            abort(400, "header X-Lab-Admin wajib")
+
+    def safe_next(value):
+        return value if isinstance(value, str) and value.startswith("/") and not value.startswith(("//", "/\\")) else "/"
+
     def admin_only():
+        if session_valid():
+            csrf_header_required()
+            return
         auth = request.authorization
         ip, now = client_ip(), time.time()
         check_login_block(ip, now)
@@ -121,11 +162,10 @@ def create_app(cfg: Config) -> Flask:
         if auth is not None:
             record_login(ip, ok, now)
         if not ok:
-            abort(Response("Login diperlukan", 401, {"WWW-Authenticate": 'Basic realm="Lab Control"'}))
-        # A custom header forces a CORS preflight, so other websites cannot drive the API
-        # with the admin's cached credentials.
-        if request.method != "GET" and request.headers.get("X-Lab-Admin") != "1":
-            abort(400, "header X-Lab-Admin wajib")
+            if request.path.startswith("/api/"):   # tanpa tantangan Basic, supaya browser tidak memunculkan prompt
+                abort(Response(json.dumps({"error": "login diperlukan"}), 401, mimetype="application/json"))
+            abort(redirect("/login?next=" + quote(request.full_path.rstrip("?"), safe="/")))
+        csrf_header_required()
 
     def agent_only():
         if cfg.block_agent_via_tunnel and via_tunnel():
@@ -364,6 +404,40 @@ def create_app(cfg: Config) -> Flask:
         release.prune_files(releases_dir, None)
         store.add_event("*", "info", "Admin menghentikan distribusi rilis agent")
         return jsonify(ok=True)
+
+    # login ---------------------------------------------------------------
+    def login_page(error="", status=200):
+        return render_template("login.html", lab_name=cfg.lab_name, error=error,
+                               next=safe_next(request.values.get("next"))), status
+
+    @app.get("/login")
+    def login_form():
+        if session_valid():
+            return redirect(safe_next(request.args.get("next")))
+        return login_page()
+
+    @app.post("/login")
+    def login_submit():
+        ip, now = client_ip(), time.time()
+        try:
+            check_login_block(ip, now)
+        except HTTPException:             # diblokir (429): tampilkan di halaman login
+            return login_page("Terlalu banyak percobaan login. Coba lagi nanti.", 429)
+        username, password = request.form.get("username", ""), request.form.get("password", "")
+        ok = (secrets.compare_digest(username.strip(), cfg.admin_user)
+              and secrets.compare_digest(password, cfg.admin_password))
+        record_login(ip, ok, now)
+        if not ok:
+            return login_page("Username atau password salah.", 401)
+        session.clear()
+        session["lab"] = password_fingerprint()
+        session.permanent = True
+        return redirect(safe_next(request.form.get("next")))
+
+    @app.get("/logout")
+    def logout():
+        session.clear()
+        return redirect("/login")
 
     # halaman -------------------------------------------------------------
     def page(template, active, **extra):

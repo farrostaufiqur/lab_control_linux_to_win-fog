@@ -44,7 +44,7 @@ Catat **agent_token** dan password dashboard (tersimpan di `config.toml`). Ubah 
 Agar jalan otomatis: salin `labcontrol.service` ke `/etc/systemd/system/`, buat user `labcontrol`, lalu `systemctl enable --now labcontrol`.
 Beri IP tetap pada server (atau reservasi DHCP).
 
-Dashboard memakai HTTP Basic tanpa enkripsi. Cukup untuk LAN tertutup. Untuk yang lebih aman, taruh di belakang nginx/Caddy dengan HTTPS.
+Dashboard memakai halaman login (form username + password, cookie sesi 12 jam, tombol keluar di pojok kanan atas) dan tidak terenkripsi bila diakses lewat HTTP LAN. Cukup untuk LAN tertutup. Untuk yang lebih aman, taruh di belakang nginx/Caddy dengan HTTPS.
 
 ## Bagaimana Linux dan Windows terhubung (jaringan lokal)
 Server **tidak** menghubungi Windows. Agent di tiap PC yang menghubungi server tiap 5 detik lewat HTTP ke `http://IP-SERVER:8080`. Jadi syaratnya:
