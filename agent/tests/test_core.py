@@ -49,7 +49,7 @@ def env(tmp_path):
     clock, server, platform = Clock(), FakeServer(), FakePlatform()
 
     def make(**overrides):
-        cfg = AgentConfig(server_urls=("http://x",), token="t", state_dir=str(tmp_path), **overrides)
+        cfg = AgentConfig(server_url="http://x", token="t", state_dir=str(tmp_path), **overrides)
         return Agent(cfg, platform, post=server, clock=clock,
                      upload=lambda url, data, token: server.uploads.append((url, data, token)),
                      lan_ip=lambda: "192.168.1.50")
@@ -120,7 +120,7 @@ def test_boot_offline_policy_lock_vs_unlock(env):
 def test_boot_offline_policy_unlock_after_grace(tmp_path):
     clock, server, platform = Clock(), FakeServer(), FakePlatform()
     server.up = False
-    cfg = AgentConfig(server_urls=("http://x",), token="t", state_dir=str(tmp_path / "n"),
+    cfg = AgentConfig(server_url="http://x", token="t", state_dir=str(tmp_path / "n"),
                       offline_boot_policy="unlock", boot_grace_seconds=60)
     agent = Agent(cfg, platform, post=server, clock=clock)
     assert agent.view().locked is True
@@ -130,7 +130,7 @@ def test_boot_offline_policy_unlock_after_grace(tmp_path):
 
 def test_exempt_user_is_never_locked(tmp_path):
     clock, server, platform = Clock(), FakeServer(), FakePlatform(user="Administrator")
-    cfg = AgentConfig(server_urls=("http://x",), token="t", state_dir=str(tmp_path))
+    cfg = AgentConfig(server_url="http://x", token="t", state_dir=str(tmp_path))
     agent = Agent(cfg, platform, post=server, clock=clock)
     server.reply.update(locked=True, changes_in=None)
     agent.poll_once()
@@ -209,7 +209,7 @@ def test_poll_reports_exe_sha_when_platform_knows_it():
     platform = FakePlatform()
     platform.exe_sha256 = lambda: "ab" * 32
     sent = []
-    agent = Agent(AgentConfig(server_urls=("http://x",), token="t", state_dir="/nonexistent-x"), platform,
+    agent = Agent(AgentConfig(server_url="http://x", token="t", state_dir="/nonexistent-x"), platform,
                   post=lambda url, body, token: sent.append(body) or {"locked": False}, clock=Clock())
     assert agent.poll_once()
     assert sent[0]["exe_sha"] == "ab" * 32
@@ -301,21 +301,3 @@ def test_requests_carry_own_user_agent():
     from labagent import VERSION
     from labagent.core import agent_headers
     assert agent_headers("t")["User-Agent"] == f"LabAgent/{VERSION}"
-
-
-def test_poll_and_screenshot_fall_back_to_second_server(tmp_path):
-    clock, platform = Clock(), FakePlatform()
-    shots(platform)
-    urls, uploads = [], []
-
-    def post(url, body, token):
-        urls.append(url)
-        if url.startswith("http://lan"):
-            raise OSError("LAN tidak terjangkau")
-        return {"locked": False, "changes_in": None, "commands": [], "screenshot_interval": 10}
-    cfg = AgentConfig(server_urls=("http://lan", "https://net"), token="t", state_dir=str(tmp_path))
-    agent = Agent(cfg, platform, post=post, clock=clock, lan_ip=lambda: "",
-                  upload=lambda url, data, token: uploads.append(url))
-    assert agent.poll_once() is True
-    assert urls == ["http://lan/api/agent/poll", "https://net/api/agent/poll"]
-    assert agent.screenshot_once() is True and uploads == ["https://net/api/agent/screenshot?host=PC-01"]

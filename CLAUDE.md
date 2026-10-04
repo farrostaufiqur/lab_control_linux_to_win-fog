@@ -13,11 +13,10 @@ Perangkat lunak manajemen lab komputer milik sekolah: server Linux (`server/`, F
 - `server/labserver/templates/`: satu halaman per menu sidebar (`dashboard`, `pc`, `jadwal`, `log`, `pembaruan`, `pengaturan`) di atas `base.html`; JS/CSS bersama di `static/lab.js`, `static/lab.css`
 - `server/labserver/static/vendor/`: aset template admin (salinan dari `WEBSITE/fog/admin/html`, sama dengan admin fog.tf); jangan diedit selain dua tambalan kecil (`?.` pada `.navbar-logo`, impor highlight dibuang). `/static` terbuka tanpa login
 - `agent/labagent/core.py`: logika agent tanpa ketergantungan Windows
-- `agent/labagent/servers.py`: daftar alamat server (LAN + internet) yang ditanam saat build lewat `deploy/build.conf` -> `labagent/_build.py` (di-gitignore, dibuat `build.ps1`); `Servers.call` mencoba alamat terakhir yang berhasil dulu. `config.json` tidak lagi berisi `server_url` (boleh, sebagai pengganti)
 - `agent/labagent/winapi.py`, `overlay.py`: bagian Windows
 - `agent/labagent/updater.py`, `helper.py`, `ed25519.py`: pembaruan otomatis dan pembantu SYSTEM (lihat bawah); logika murni, efek samping disuntikkan lewat `helper.Ports`
 - `server/labserver/release.py`, `ed25519.py`: penyimpanan rilis; `ed25519.py` salinan identik dari agent (dicek tes), format pesan tanda tangan harus sama dengan `updater.release_message`
-- `agent/tools/release.py`: keygen/sign rilis, dijalankan di komputer admin. `deploy/build.ps1` memanggil `sign` otomatis bila `agent/rilis.key` ada (versi dari `labagent.VERSION`), menghasilkan `deploy/labagent.exe.release.json`
+- `agent/tools/release.py`: keygen/sign rilis, dijalankan di komputer admin
 - `agent/labagent/killswitch.py`: pemulihan darurat admin (lihat bawah); logikanya murni, bagian Windows ada di `winapi.py`
 
 ## Pemulihan darurat (pencopotan lewat drive)
@@ -69,6 +68,6 @@ Hari: 0 = Senin ... 6 = Minggu. Bila dashboard di belakang Cloudflare Access, ta
 - Pembaruan otomatis + helper: logika dan endpoint server sudah diuji (`tests/test_helper.py`, `test_updater.py`, `server/tests/test_release.py`, plus uji ujung-ke-ujung helper terhadap server), tetapi `winapi.apply_user_policies`, `launch_update` (tugas `LabAgentUpdate`), `current_sid`, `own_exe_sha256`, `apply-update.cmd`, dan tugas `LabAgentHelper` **belum dicoba di Windows**. Uji di satu PC: build, `install.ps1 -UpdatePublicKey`, cek overlay bisa mengunci tanpa "Kebijakan registry gagal", lalu unggah rilis dengan versi berbeda dan pastikan exe berganti, `helper.ok` berisi SHA baru, dan rollback berjalan bila exe rusak. Curigai: apakah `schtasks /TR "\"path\""` menerima path dengan spasi, dan apakah skrip `.cmd` dari tugas SYSTEM sekali-jalan tetap hidup setelah `taskkill labagent.exe`.
 - Ganti nama Windows: logika server dan helper sudah diuji, tetapi `winapi.rename_computer` (`SetComputerNameExW` sebagai SYSTEM) dan perpindahan entri setelah restart **belum dicoba di Windows**. Uji di satu PC: ganti nama, restart, pastikan `hostname` berubah dan entri lama hilang dengan alias/log pindah.
 - Screenshot: logika agent dan server sudah diuji (termasuk ujung-ke-ujung `core.Agent` -> server dan lewat `lab.fog.tf`), tetapi `winapi.WindowsPlatform.screenshot` (Pillow `ImageGrab`) dan build PyInstaller dengan Pillow **belum dicoba di Windows**. Uji di satu PC: build, pasang, pastikan pratinjau muncul di dashboard dalam sekitar 10 detik dan hilang saat PC dikunci.
-- Agent lewat tunnel belum dicoba dari PC Windows sungguhan (HTTPS dari exe PyInstaller): build dengan `build.conf` berisi `ServerUrl=https://lab.fog.tf`, lalu pasang satu PC.
-- Belum ada agent terpasang (versi saat ini 1.1.0; semua PC lama dihapus dari server 2026-10-04). Pasang tiap PC sekali dengan `build.cmd` lalu `install.cmd`; baru setelah itu pembaruan otomatis.
+- Agent lewat tunnel belum dicoba dari PC Windows sungguhan (HTTPS dari exe PyInstaller): pasang satu PC dengan `-ServerUrl https://lab.fog.tf`.
+- Belum ada agent terpasang (versi saat ini 1.2.0; semua PC lama dihapus dari server 2026-10-04). Pasang tiap PC sekali dengan `build.cmd` lalu `install.cmd`; baru setelah itu pembaruan otomatis.
 - Uji Windows umum yang belum tercatat: overlay di semua monitor, keyboard terblokir, layar Ctrl+Alt+Del, tombol shutdown.

@@ -55,16 +55,16 @@ Server **tidak** menghubungi Windows. Agent di tiap PC yang menghubungi server t
 
 Cek dari PC Windows sebelum memasang: `curl http://192.168.1.10:8080/healthz` harus menjawab `{"ok":true}`. `install.ps1` juga melakukan cek ini.
 
-Setelah server berjalan, `labagent.exe` dibuat sekali, lalu `install.cmd` dijalankan di tiap PC, dan PC langsung muncul di dashboard. Tidak ada langkah lain, kecuali akun siswa standar dan cmd diblokir (lihat di bawah).
+Setelah server berjalan, `labagent.exe` dibuat sekali, lalu `install.ps1 -ServerUrl ... -Token ...` dijalankan di tiap PC, dan PC langsung muncul di dashboard. Tidak ada langkah lain, kecuali akun siswa standar dan cmd diblokir (lihat di bawah).
 
 ## Dashboard online lewat Cloudflare Tunnel
 Tunnel membuat dashboard bisa dibuka dari mana saja tanpa membuka port di router. `cloudflared` berjalan di server Linux dan membuat koneksi keluar ke Cloudflare (HTTPS dari Cloudflare).
 
-**Agent lewat tunnel atau LAN.** Secara bawaan server menolak `/api/agent/*` (404) untuk permintaan yang datang lewat Cloudflare (`block_agent_via_tunnel = true`). Supaya PC tidak harus satu LAN dengan server, setel `block_agent_via_tunnel = false` di `config.toml`, hapus aturan `path: ^/api/agent` dari `config.yml` cloudflared, lalu tambahkan `ServerUrl=https://lab.contoh.com` ke `agent\deploy\build.conf` sebelum build. Syaratnya:
+**Agent lewat tunnel atau LAN.** Secara bawaan server menolak `/api/agent/*` (404) untuk permintaan yang datang lewat Cloudflare (`block_agent_via_tunnel = true`). Supaya PC tidak harus satu LAN dengan server, setel `block_agent_via_tunnel = false` di `config.toml`, hapus aturan `path: ^/api/agent` dari `config.yml` cloudflared, lalu pasang agent dengan `-ServerUrl https://lab.contoh.com`. Syaratnya:
 - Agent **v1.2.0 ke atas**. Agent lama ditolak Cloudflare (error 1010) karena memakai User-Agent bawaan Python.
 - Hostname itu **tidak** boleh di belakang Cloudflare Access, atau jalur `/api/agent` harus dikecualikan; agent tidak bisa login Access.
 - Satu-satunya pengaman jalur agent adalah `agent_token`; biarkan panjang dan acak (bawaan 32 karakter). Siapa pun yang memegang token bisa mendaftarkan PC palsu dan mengirim screenshot palsu, tetapi tidak bisa mengendalikan PC lain.
-- Alamat LAN dan alamat internet bisa dipakai bersamaan (lihat `build.conf` di bawah): agent memakai alamat yang terakhir berhasil dan mencoba yang lain bila gagal.
+- PC yang sudah terpasang dengan alamat LAN tetap memakai alamat itu sampai dipasang ulang dengan `-ServerUrl` baru. Kedua jalur bisa dipakai bersamaan.
 
 Langkah (butuh akun Cloudflare gratis dan domain di Cloudflare):
 ```bash
@@ -86,21 +86,15 @@ Tanpa domain, untuk uji sementara: `cloudflared tunnel --url http://localhost:80
 1. Di **satu** PC Windows dengan Python 3.11+: `agent\deploy\build.ps1` → menghasilkan `deploy\labagent.exe`.
 2. Di **setiap** PC lab, PowerShell sebagai Administrator:
    ```powershell
-   .\install.ps1 -Token <agent_token>
+   .\install.ps1 -ServerUrl http://192.168.1.10:8080 -Token <agent_token>
    ```
 3. Logout/login (atau restart). PC muncul di dashboard.
 
 Hapus dengan `uninstall.ps1`.
 
-**Alamat server ditanam saat build**, bukan saat instal. `build.conf` (satu baris `ServerUrl=` per alamat, boleh dua: LAN dan internet) dibaca `build.ps1` dan disimpan ke dalam exe. Contoh:
-```
-ServerUrl=http://192.168.1.17:8080
-ServerUrl=https://lab.fog.tf
-```
-Mengganti alamat berarti build ulang dan merilis exe baru (PC lama ikut memperbarui lewat pembaruan otomatis selama masih bisa menjangkau server). Bila `build.conf` belum ada, `build.cmd` menanyakannya sekali.
-
 **Sekali klik:** di folder `agent\deploy` ada `build.cmd`, `install.cmd`, dan `uninstall.cmd`. Klik dua kali; `install.cmd` dan `uninstall.cmd` meminta hak Administrator sendiri lewat UAC (tidak perlu "Run as administrator"), `build.cmd` tidak butuh hak itu. `install.cmd` membaca pengaturan dari `install.conf` di folder yang sama:
 ```
+ServerUrl=http://192.168.1.10:8080
 Token=<agent_token>
 KillFileName=
 UpdatePublicKey=
@@ -130,8 +124,11 @@ python agent\tools\release.py keygen rilis.key      # cetak kunci publik; simpan
 ```
 Isi kunci publik di `server/config.toml` (`update_public_key = "..."`), restart server, dan pasang agent dengan `-UpdatePublicKey <kunci publik>`.
 
-Tiap rilis: naikkan `VERSION` di `agent\labagent\__init__.py`, taruh `rilis.key` di folder `agent`, lalu klik dua kali `build.cmd`. Bila `rilis.key` ada, build otomatis menandatangani exe dan menghasilkan `deploy\labagent.exe.release.json` (berisi versi, SHA-256, ukuran, dan tanda tangan; keygen hanya membuat kunci). Penandatanganan manual tetap bisa: `py tools\release.py sign deploy\labagent.exe --key rilis.key --version X.Y.Z`.
-
+Tiap rilis:
+```
+agent\deploy\build.ps1
+python agent\tools\release.py sign agent\deploy\labagent.exe --key rilis.key --version 1.2.0
+```
 Di dashboard, bagian "Pembaruan agent": pilih `labagent.exe` dan `labagent.exe.release.json`, klik Unggah. Tiap PC menampilkan versi agent dan "menunggu pembaruan" sampai memakai rilis aktif.
 
 Cara kerja: pembantu bertanya ke server tiap 60 detik; bila SHA-256 exe rilis berbeda dari exe terpasang, ia mengunduh (jeda acak 0-120 dtk agar PC tidak mengunduh serentak), memeriksa ukuran, SHA-256, tanda tangan, dan awalan `MZ`, lalu menjalankan skrip pergantian lewat tugas sekali-jalan `LabAgentUpdate`. Skrip menghentikan agent, menukar exe (yang lama jadi `labagent.bak`), menyalakan ulang, dan menunggu 30 detik agar pembantu baru menulis `helper.ok` berisi SHA-nya. Jika tidak muncul, exe lama dipulihkan dan rilis itu dicatat di `updater.json` supaya tidak dicoba terus. Keputusan pakai SHA-256, bukan nomor versi, jadi tidak ada loop karena salah label. Menghentikan distribusi tidak mengembalikan agent ke versi lama; unggah rilis yang lebih lama bila perlu.

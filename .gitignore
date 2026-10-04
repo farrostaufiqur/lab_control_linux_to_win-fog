@@ -71,6 +71,3 @@ agent/*.spec
 agent/deploy/labagent.exe
 agent/prompt_*.txt
 agent/deploy/prompt_*.txt
-
-# Alamat server hasil build.ps1 (dari deploy/build.conf)
-agent/labagent/_build.py
