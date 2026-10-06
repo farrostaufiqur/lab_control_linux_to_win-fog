@@ -22,10 +22,6 @@ command_ttl = 120              # detik, perintah shutdown/restart kedaluwarsa ji
 event_retention_days = 30      # log lebih lama dari ini dihapus otomatis
 warn_seconds = 300             # client menampilkan peringatan sekian detik sebelum kunci
 
-# Pembaruan otomatis agent: kunci PUBLIK Ed25519 (hex 64 karakter) dari `python agent/tools/release.py keygen`.
-# Kosong = unggah rilis dimatikan. Jangan pernah menaruh kunci privat di server.
-update_public_key = ""
-
 # Keamanan akses online (Cloudflare Tunnel)
 block_agent_via_tunnel = true  # tolak /api/agent/* jika datang lewat Cloudflare; false = agent boleh lewat tunnel (butuh agent v1.2.0+)
 max_login_failures = 5         # salah password sebanyak ini dari satu IP ...
@@ -51,7 +47,6 @@ class Config:
     block_agent_via_tunnel: bool = True
     max_login_failures: int = 5
     login_block_seconds: int = 300
-    update_public_key: str = ""
 
 
 def write_default(path: Path) -> tuple[str, str]:
@@ -85,11 +80,7 @@ def load(path: Path) -> Config:
         block_agent_via_tunnel=bool(raw.get("block_agent_via_tunnel", True)),
         max_login_failures=int(raw.get("max_login_failures", 5)),
         login_block_seconds=int(raw.get("login_block_seconds", 300)),
-        update_public_key=str(raw.get("update_public_key", "")).strip().lower(),
     )
-    if cfg.update_public_key and (len(cfg.update_public_key) != 64
-                                  or any(c not in "0123456789abcdef" for c in cfg.update_public_key)):
-        raise SystemExit("update_public_key harus 64 karakter heksadesimal.")
     if len(cfg.admin_password) < 8 or len(cfg.agent_token) < 16:
         raise SystemExit("admin_password minimal 8 karakter dan agent_token minimal 16 karakter.")
     return cfg

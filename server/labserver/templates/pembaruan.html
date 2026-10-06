@@ -4,14 +4,13 @@
 <div class="page-head"><h4>Pembaruan agent</h4></div>
 <div class="widget-box card">
     <p id="rel-status">Memuat…</p>
-    <p class="text-muted">Bangun <code>labagent.exe</code>, tanda tangani di komputer admin
-        (<code>python tools/release.py sign labagent.exe --key rilis.key --version X.Y.Z</code>), lalu pilih
-        kedua berkasnya. Semua PC memasang rilis ini sendiri; PC yang sedang mati memasangnya saat menyala.</p>
+    <p class="text-muted">Bangun <code>labagent.exe</code> (<code>build.cmd</code>), lalu unggah di sini. Semua PC memasang rilis ini
+        sendiri; PC yang sedang mati memasangnya saat menyala. Yang bisa mengunggah hanya admin yang sudah login.</p>
     <div class="row g-3">
-        <div class="col-md-6"><label class="form-label" for="rel-exe">labagent.exe</label>
+        <div class="col-md-8"><label class="form-label" for="rel-exe">labagent.exe</label>
             <input class="form-control" type="file" id="rel-exe" accept=".exe"></div>
-        <div class="col-md-6"><label class="form-label" for="rel-json">labagent.exe.release.json</label>
-            <input class="form-control" type="file" id="rel-json" accept=".json"></div>
+        <div class="col-md-4"><label class="form-label" for="rel-version">Versi (boleh kosong)</label>
+            <input class="form-control" type="text" id="rel-version" maxlength="32" placeholder="mis. 1.2.1"></div>
     </div>
     <div class="d-flex flex-wrap gap-2 align-items-center mt-3">
         <button class="btn btn-primary" id="rel-upload">Unggah rilis</button>
@@ -33,12 +32,10 @@
 async function refresh() {
   try {
     const [r, data] = await Promise.all([api("/api/release"), api("/api/pcs")]);
-    $("#rel-status").textContent = !r.signing_enabled
-      ? "Unggah dimatikan: isi update_public_key di config.toml server, lalu restart server."
-      : r.release
-        ? `Rilis aktif: v${r.release.version} (${(r.release.size / 1048576).toFixed(1)} MB, diunggah ${dateTime(r.release.uploaded)}). ` +
-          `${r.pcs_current} dari ${r.pcs_total} PC sudah memakainya.`
-        : "Belum ada rilis. Agent tidak diperbarui.";
+    $("#rel-status").textContent = r.release
+      ? `Rilis aktif: v${r.release.version} (${(r.release.size / 1048576).toFixed(1)} MB, diunggah ${dateTime(r.release.uploaded)}). ` +
+        `${r.pcs_current} dari ${r.pcs_total} PC sudah memakainya.`
+      : "Belum ada rilis. Agent tidak diperbarui.";
     $("#builds").innerHTML = data.pcs.map((pc) => {
       const state = !pc.version ? `<span class="badge badge-light-dark">tidak diketahui</span>`
         : !r.release ? "" : pc.exe_sha === r.release.sha256 ? `<span class="badge badge-light-success">terbaru</span>`
@@ -50,20 +47,18 @@ async function refresh() {
   } catch (e) { setErr("Server tidak terjangkau: " + e.message); }
 }
 $("#rel-upload").onclick = async () => {
-  const msg = $("#rel-msg"), exe = $("#rel-exe").files[0], sig = $("#rel-json").files[0];
-  if (!exe || !sig) { msg.textContent = "Pilih exe dan berkas .release.json."; return; }
-  let manifest;
-  try { manifest = JSON.parse(await sig.text()); } catch (e) { msg.textContent = "Berkas tanda tangan bukan JSON."; return; }
-  if (!confirm(`Unggah v${manifest.version}? Semua PC akan memperbarui agent secara otomatis.`)) return;
+  const msg = $("#rel-msg"), exe = $("#rel-exe").files[0], version = $("#rel-version").value.trim();
+  if (!exe) { msg.textContent = "Pilih labagent.exe."; return; }
+  if (!confirm(`Unggah ${exe.name}${version ? " v" + version : ""}? Semua PC akan memperbarui agent secara otomatis.`)) return;
   msg.textContent = "Mengunggah…";
   try {
-    const q = new URLSearchParams({ version: manifest.version, signature: manifest.signature });
-    const res = await fetch("/api/release?" + q, {
+    const res = await fetch("/api/release?" + new URLSearchParams({ version }), {
       method: "POST", body: exe,
       headers: { "Content-Type": "application/octet-stream", "X-Lab-Admin": "1" },
     });
+    if (res.status === 401) { location.href = "/login?next=/pembaruan"; return; }
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-    msg.textContent = "Rilis aktif ✓"; $("#rel-exe").value = ""; $("#rel-json").value = ""; refresh();
+    msg.textContent = "Rilis aktif ✓"; $("#rel-exe").value = ""; $("#rel-version").value = ""; refresh();
   } catch (e) { msg.textContent = "Gagal: " + e.message; }
 };
 $("#rel-stop").onclick = async () => {

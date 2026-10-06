@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import hmac
 import ipaddress
@@ -359,7 +358,6 @@ def create_app(cfg: Config) -> Flask:
         rel = current_release()
         return jsonify({
             "release": rel,
-            "signing_enabled": bool(cfg.update_public_key),
             "pcs_total": len(pcs),
             "pcs_current": sum(1 for row in pcs if rel and row["exe_sha"] == rel["sha256"]),
         })
@@ -367,12 +365,9 @@ def create_app(cfg: Config) -> Flask:
     @app.post("/api/release")
     def api_release_post():
         admin_only()
-        if not cfg.update_public_key:
-            abort(409, "update_public_key belum diatur di config.toml server")
-        version = request.args.get("version", "")
-        signature = release.decode_signature(request.args.get("signature", ""))
-        if not release.VERSION_RE.match(version) or signature is None:
-            abort(400, "version atau signature tidak valid")
+        version = request.args.get("version", "").strip()
+        if version and not release.VERSION_RE.match(version):
+            abort(400, "versi: 1-32 karakter huruf, angka, titik, garis bawah, atau tanda hubung")
         request.max_content_length = release.MAX_RELEASE_BYTES
         releases_dir.mkdir(parents=True, exist_ok=True)
         tmp = releases_dir / f"upload-{secrets.token_hex(6)}.tmp"
@@ -385,13 +380,11 @@ def create_app(cfg: Config) -> Flask:
                 is_exe = f.read(2) == b"MZ"
             if not size or not is_exe:
                 abort(400, "berkas bukan exe Windows")
-            if not release.verify(cfg.update_public_key, version, sha, signature):
-                abort(400, "tanda tangan tidak cocok dengan berkas, versi, atau kunci publik server")
+            version = version or release.default_version(sha)
             release.store_file(releases_dir, sha, tmp)
         finally:
             tmp.unlink(missing_ok=True)
-        info = {"version": version, "sha256": sha, "size": size,
-                "signature": base64.b64encode(signature).decode(), "uploaded": time.time()}
+        info = {"version": version, "sha256": sha, "size": size, "uploaded": time.time()}
         store.set_setting("agent_release", info)
         release.prune_files(releases_dir, sha)
         store.add_event("*", "info", f"Admin mengunggah rilis agent {version} ({sha[:12]})")

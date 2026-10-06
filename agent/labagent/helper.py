@@ -174,8 +174,7 @@ class Helper:
         if not isinstance(reply, dict):
             return
         self._rename_tick(reply.get("rename"))
-        if self.cfg.update_public_key:
-            self._update_tick(now, reply.get("release"))
+        self._update_tick(now, reply.get("release"))
 
     # ganti nama komputer -----------------------------------------------------------
     def _rename_tick(self, request) -> None:
@@ -205,9 +204,6 @@ class Helper:
         sha = manifest["sha256"]
         if sha == self.ports.own_sha or sha in self._bad:
             self._pending = None
-            return
-        if not updater.signature_valid(self.cfg.update_public_key, manifest):
-            self.log.append(f"tanda tangan rilis {manifest['version']} tidak valid; diabaikan")
             return
         if self._pending is None or self._pending[0] != sha:
             self._pending = (sha, now + self._rand(0, DOWNLOAD_JITTER_SECONDS))  # sebar unduhan antar PC

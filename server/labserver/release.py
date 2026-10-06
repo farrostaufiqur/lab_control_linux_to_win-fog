@@ -1,42 +1,22 @@
-"""Rilis agent: server hanya menyimpan dan membagikan; keaslian dijamin tanda tangan admin (Ed25519).
+"""Rilis agent: admin mengunggah labagent.exe lewat dashboard; server menyimpan dan membagikannya.
 
-Format pesan harus sama persis dengan agent/labagent/updater.py (dicek oleh tes).
+Tidak ada tanda tangan: yang berhak memasang rilis adalah siapa pun yang bisa login sebagai admin.
 """
-import base64
-import binascii
 import hashlib
 import re
 from pathlib import Path
-
-from . import ed25519
 
 VERSION_RE = re.compile(r"^[0-9A-Za-z._-]{1,32}$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_RELEASE_BYTES = 200 * 1024 * 1024
 
 
-def message(version: str, sha256: str) -> bytes:
-    return f"labagent-release-v1\n{version}\n{sha256}".encode()
-
-
-def decode_signature(text: str) -> bytes | None:
-    try:
-        signature = base64.b64decode(text.replace(" ", "+"), validate=True)  # '+' bisa berubah jadi spasi di query
-    except (binascii.Error, ValueError):
-        return None
-    return signature if len(signature) == 64 else None
-
-
-def verify(public_key_hex: str, version: str, sha256: str, signature: bytes) -> bool:
-    try:
-        public = bytes.fromhex(public_key_hex)
-    except ValueError:
-        return False
-    return ed25519.verify(public, message(version, sha256), signature)
+def default_version(sha256: str) -> str:
+    return f"build-{sha256[:8]}"
 
 
 def manifest(release: dict) -> dict:
-    return {k: release[k] for k in ("version", "sha256", "size", "signature")}
+    return {k: release[k] for k in ("version", "sha256", "size")}
 
 
 def store_file(directory: Path, sha256: str, tmp_path: Path) -> Path:

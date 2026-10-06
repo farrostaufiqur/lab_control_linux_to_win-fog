@@ -1,15 +1,10 @@
 """Logika pembaruan agent yang tidak bergantung pada Windows (bisa diuji di mana saja).
 
-Rilis diterima hanya jika (1) SHA-256 file cocok dengan manifest dan (2) manifest ditandatangani
-kunci privat admin (Ed25519). Server dan jaringan tidak dipercaya untuk keaslian file.
+Rilis datang dari server (diunggah admin lewat dashboard). Agent hanya memastikan unduhan utuh:
+ukuran dan SHA-256 harus cocok dengan manifest dan awalan file `MZ` (exe Windows). Tidak ada tanda tangan.
 """
-import base64
-import binascii
 import hashlib
 import re
-from pathlib import Path
-
-from . import ed25519
 
 VERSION_RE = re.compile(r"^[0-9A-Za-z._-]{1,32}$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -17,37 +12,18 @@ MAX_RELEASE_BYTES = 200 * 1024 * 1024
 VERIFY_WAIT_SECONDS = 30
 
 
-def release_message(version: str, sha256: str) -> bytes:
-    """Bytes yang ditandatangani admin; mengikat versi dan isi file."""
-    return f"labagent-release-v1\n{version}\n{sha256}".encode()
-
-
 def parse_manifest(raw) -> dict | None:
     """Memeriksa bentuk manifest dari server. Mengembalikan dict bersih atau None."""
     if not isinstance(raw, dict):
         return None
-    version, sha, sig, size = raw.get("version"), raw.get("sha256"), raw.get("signature"), raw.get("size")
+    version, sha, size = raw.get("version"), raw.get("sha256"), raw.get("size")
     if not (isinstance(version, str) and VERSION_RE.match(version)):
         return None
     if not (isinstance(sha, str) and SHA_RE.match(sha)):
         return None
     if not (isinstance(size, int) and 0 < size <= MAX_RELEASE_BYTES):
         return None
-    try:
-        signature = base64.b64decode(str(sig), validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    if len(signature) != 64:
-        return None
-    return {"version": version, "sha256": sha, "size": size, "signature": signature}
-
-
-def signature_valid(public_key_hex: str, manifest: dict) -> bool:
-    try:
-        public = bytes.fromhex(public_key_hex)
-    except ValueError:
-        return False
-    return ed25519.verify(public, release_message(manifest["version"], manifest["sha256"]), manifest["signature"])
+    return {"version": version, "sha256": sha, "size": size}
 
 
 def file_sha256(path) -> str:

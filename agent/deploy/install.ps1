@@ -12,8 +12,7 @@ param(
     [string]$Exe = "$PSScriptRoot\labagent.exe",
     [string[]]$ExemptUsers = @("administrator", "admin", "labadmin"),
     [ValidateSet("lock", "unlock")][string]$OfflineBootPolicy = "lock",
-    [string]$KillFileName = "",   # opsional: nama file rahasia untuk pemulihan darurat (lihat README)
-    [string]$UpdatePublicKey = "" # opsional: kunci publik rilis (64 hex) agar agent memperbarui diri dari server
+    [string]$KillFileName = ""    # opsional: nama file rahasia untuk pemulihan darurat (lihat README)
 )
 $ErrorActionPreference = "Stop"
 
@@ -28,7 +27,6 @@ if (Test-Path $confPath) {
 if (-not $ServerUrl)       { $ServerUrl = [string]$conf["ServerUrl"] }
 if (-not $Token)           { $Token = [string]$conf["Token"] }
 if (-not $KillFileName)    { $KillFileName = [string]$conf["KillFileName"] }
-if (-not $UpdatePublicKey) { $UpdatePublicKey = [string]$conf["UpdatePublicKey"] }
 if (-not $PSBoundParameters.ContainsKey("OfflineBootPolicy") -and $conf["OfflineBootPolicy"] -in "lock", "unlock") {
     $OfflineBootPolicy = $conf["OfflineBootPolicy"]
 }
@@ -37,8 +35,7 @@ if (-not $ServerUrl -or -not $Token) {
     if (-not $ServerUrl) { $ServerUrl = (Read-Host "Alamat server (mis. http://192.168.1.10:8080 atau https://lab.contoh.com)").Trim() }
     if (-not $Token)     { $Token = (Read-Host "Token agent (agent_token di config.toml server)").Trim() }
     if (-not $KillFileName)    { $KillFileName = (Read-Host "Nama file pemulihan darurat (Enter = tidak dipakai)").Trim() }
-    if (-not $UpdatePublicKey) { $UpdatePublicKey = (Read-Host "Kunci publik pembaruan, 64 hex (Enter = tidak dipakai)").Trim() }
-    @("ServerUrl=$ServerUrl", "Token=$Token", "KillFileName=$KillFileName", "UpdatePublicKey=$UpdatePublicKey",
+    @("ServerUrl=$ServerUrl", "Token=$Token", "KillFileName=$KillFileName",
       "OfflineBootPolicy=$OfflineBootPolicy") | Set-Content -Path $confPath -Encoding ASCII
 }
 if ($ServerUrl -notmatch '^https?://') { throw "ServerUrl harus diawali http:// atau https://" }
@@ -59,10 +56,6 @@ $config = [ordered]@{
     offline_boot_policy = $OfflineBootPolicy
     exempt_users        = $ExemptUsers
     state_dir           = $data
-}
-if ($UpdatePublicKey) {
-    if ($UpdatePublicKey -notmatch '^[0-9a-fA-F]{64}$') { throw "UpdatePublicKey harus 64 karakter heksadesimal (dari: python tools/release.py keygen)" }
-    $config["update_public_key"] = $UpdatePublicKey.ToLowerInvariant()
 }
 if ($KillFileName) {
     # hanya hash-nya yang disimpan; sama dengan killswitch.name_hash (trim + huruf kecil)
@@ -105,7 +98,7 @@ $helperSettings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -Ex
 Register-ScheduledTask -TaskName "LabAgentHelper" -Action $helperAction -Trigger $helperTrigger `
     -Principal $helperPrincipal -Settings $helperSettings -Force | Out-Null
 Start-ScheduledTask -TaskName "LabAgentHelper"
-if ($UpdatePublicKey) { Write-Host "Pembaruan otomatis aktif." } else { Write-Host "Pembaruan otomatis mati (tanpa -UpdatePublicKey)." }
+Write-Host "Pembaruan otomatis aktif (rilis diunggah admin lewat dashboard)."
 
 # Pemulihan darurat: proses SYSTEM yang membaca nama file tingkat pertama tiap drive yang terpasang
 if ($KillFileName) {

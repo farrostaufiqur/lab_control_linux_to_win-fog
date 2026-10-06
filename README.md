@@ -97,7 +97,6 @@ Hapus dengan `uninstall.ps1`.
 ServerUrl=http://192.168.1.10:8080
 Token=<agent_token>
 KillFileName=
-UpdatePublicKey=
 OfflineBootPolicy=lock
 ```
 Bila berkas itu belum ada, pemasangan pertama menanyakan isinya lalu menyimpannya, sehingga PC berikutnya (folder yang sama di flashdisk) tinggal klik. `install.conf` berisi token: jangan dibagikan atau di-commit.
@@ -114,31 +113,20 @@ Bila berkas itu belum ada, pemasangan pertama menanyakan isinya lalu menyimpanny
 - Shutdown/restart memakai `/f` (paksa tutup aplikasi, data belum tersimpan hilang). Ubah dengan `"force_shutdown": false`.
 
 ## Pembaruan otomatis agent
-Cukup unggah `labagent.exe` hasil build lewat dashboard, semua PC memperbarui agent sendiri; PC yang sedang mati memperbarui saat menyala. Ada dua proses agent: agent biasa (user login, overlay) dan **pembantu** `labagent.exe --helper` (tugas `LabAgentHelper`, akun SYSTEM, jalan sejak boot). Pembantu yang mengunduh dan menukar exe di `Program Files\LabAgent`, serta menulis kebijakan registry Ctrl+Alt+Del atas permintaan agent (user biasa tidak bisa menulisnya).
+Cukup unggah `labagent.exe` hasil build lewat dashboard, semua PC memperbarui agent sendiri; PC yang sedang mati memperbarui saat menyala. Tidak ada kunci, tanda tangan, atau berkas JSON: yang dibutuhkan hanya akun admin.
 
-Keamanan: server tidak dipercaya untuk keaslian file. Rilis hanya dipasang bila ditandatangani kunci privat admin (Ed25519); PC memverifikasi dengan kunci publik di `config.json`. Kunci privat disimpan di komputer admin, **bukan** di server.
+Tiap rilis:
+1. Klik dua kali `agent\deploy\build.cmd` (hasil: `agent\deploy\labagent.exe`).
+2. Di dashboard buka **Pembaruan agent**, pilih `labagent.exe`, isi versi bila mau (kosong = `build-<8 huruf SHA>`), klik **Unggah rilis**.
+3. Pantau tabel "Versi agent per PC": status berubah dari "menunggu pembaruan" menjadi "terbaru".
 
-Sekali saja:
-```
-python agent\tools\release.py keygen rilis.key      # cetak kunci publik; simpan rilis.key aman dan jangan di-commit
-```
-Isi kunci publik di `server/config.toml` (`update_public_key = "..."`), restart server, dan pasang agent dengan `-UpdatePublicKey <kunci publik>`.
+Lewat skrip: `curl -u admin:... -H 'X-Lab-Admin: 1' -H 'Content-Type: application/octet-stream' --data-binary @labagent.exe "$LAB_URL/api/release?version=1.2.1"`.
 
-Sekali klik, semuanya di `agent\deploy` (jalankan di PC build Windows):
-
-| Berkas | Fungsi | Hasil |
-|---|---|---|
-| `buat-key.cmd` | membuat kunci rilis, sekali saja; menolak menimpa `rilis.key` yang ada | `agent\rilis.key` + kunci publik di layar |
-| `build.cmd` | build exe saja (tanpa tanda tangan) | `agent\deploy\labagent.exe` |
-| `buat-rilis.cmd` | menandatangani exe yang sudah ada | `agent\deploy\labagent.exe.release.json` |
-| `build-rilis.cmd` | build lalu tanda tangan, satu klik | kedua berkas di atas |
-
-Tiap rilis: naikkan `VERSION` di `agent\labagent\__init__.py`, klik `build-rilis.cmd`, lalu unggah `labagent.exe` dan `labagent.exe.release.json` dari `agent\deploy` di dashboard. Berkas antara build ada di `agent\build` dan `agent\dist` (boleh dihapus).
-Di dashboard, bagian "Pembaruan agent": pilih `labagent.exe` dan `labagent.exe.release.json`, klik Unggah. Tiap PC menampilkan versi agent dan "menunggu pembaruan" sampai memakai rilis aktif.
+Keamanan: siapa pun yang bisa login admin di server atau memegang `agent_token` di jaringan yang sama (LAN memakai HTTP) dapat menyebarkan program yang berjalan sebagai SYSTEM di semua PC lab. Jaga password admin dan token, dan pakai alamat `https://` (tunnel) bila memungkinkan. Agent hanya memeriksa unduhan utuh (ukuran, SHA-256, awalan `MZ`), bukan keasliannya.
 
 Cara kerja: pembantu bertanya ke server tiap 60 detik; bila SHA-256 exe rilis berbeda dari exe terpasang, ia mengunduh (jeda acak 0-120 dtk agar PC tidak mengunduh serentak), memeriksa ukuran, SHA-256, tanda tangan, dan awalan `MZ`, lalu menjalankan skrip pergantian lewat tugas sekali-jalan `LabAgentUpdate`. Skrip menghentikan agent, menukar exe (yang lama jadi `labagent.bak`), menyalakan ulang, dan menunggu 30 detik agar pembantu baru menulis `helper.ok` berisi SHA-nya. Jika tidak muncul, exe lama dipulihkan dan rilis itu dicatat di `updater.json` supaya tidak dicoba terus. Keputusan pakai SHA-256, bukan nomor versi, jadi tidak ada loop karena salah label. Menghentikan distribusi tidak mengembalikan agent ke versi lama; unggah rilis yang lebih lama bila perlu.
 
-Pembaruan berjalan lewat jalur yang sama dengan agent (LAN, atau tunnel bila diizinkan). PC yang masih memakai agent lama (sebelum v1.2.0) harus dipasang ulang sekali dengan `install.ps1`; setelah itu pembaruan otomatis.
+Pembaruan berjalan lewat jalur yang sama dengan agent (LAN, atau tunnel bila diizinkan). PC yang masih memakai agent lama (sebelum v1.2.0) harus dipasang ulang sekali dengan `install.cmd`; setelah itu pembaruan otomatis.
 
 ## Nama PC
 - Tombol **Nama**: nama tampilan di dashboard saja (tidak mengubah Windows).

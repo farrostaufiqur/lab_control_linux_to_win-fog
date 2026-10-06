@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import json
 import sys
@@ -8,20 +7,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from labagent import ed25519, helper, updater  # noqa: E402
+from labagent import helper, updater  # noqa: E402
 from labagent.config import AgentConfig  # noqa: E402
 
-SECRET = bytes(range(32))
-PUBLIC = ed25519.public_key(SECRET).hex()
 SID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 OLD_SHA = "0" * 64
 NEW_EXE = b"MZ" + b"n" * 200
 
 
-def release(data=NEW_EXE, version="1.3.0", secret=SECRET):
-    sha = hashlib.sha256(data).hexdigest()
-    sig = ed25519.sign(secret, updater.release_message(version, sha))
-    return {"version": version, "sha256": sha, "size": len(data), "signature": base64.b64encode(sig).decode()}
+def release(data=NEW_EXE, version="1.3.0"):
+    return {"version": version, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 
 
 class Clock:
@@ -30,10 +25,10 @@ class Clock:
 
 
 class World:
-    def __init__(self, tmp_path, key=PUBLIC, manifest=None, exe=NEW_EXE):
+    def __init__(self, tmp_path, manifest=None, exe=NEW_EXE):
         self.install, self.state = tmp_path / "install", tmp_path / "state"
         self.install.mkdir()
-        self.cfg = AgentConfig(server_url="http://x", token="t", state_dir=str(self.state), update_public_key=key)
+        self.cfg = AgentConfig(server_url="http://x", token="t", state_dir=str(self.state))
         self.manifest, self.exe = manifest, exe
         self.applied, self.launched, self.downloads = [], [], 0
         self.loaded = True
@@ -84,7 +79,7 @@ def test_policy_request_roundtrip_and_validation(tmp_path):
 
 
 def test_policy_applied_once_then_reapplied_periodically(tmp_path):
-    w = World(tmp_path, key="")
+    w = World(tmp_path)
     h = w.helper()
     helper.write_policy_request(w.state, SID, True, False)
     h.tick(); h.tick()
@@ -98,7 +93,7 @@ def test_policy_applied_once_then_reapplied_periodically(tmp_path):
 
 
 def test_policy_retried_until_profile_loaded(tmp_path):
-    w = World(tmp_path, key="")
+    w = World(tmp_path)
     w.loaded = False
     h = w.helper()
     helper.write_policy_request(w.state, SID, True, False)
@@ -110,7 +105,7 @@ def test_policy_retried_until_profile_loaded(tmp_path):
 
 
 def test_heartbeat_and_errors(tmp_path):
-    w = World(tmp_path, key="")
+    w = World(tmp_path)
     h = w.helper()
     assert not helper.helper_alive(w.state, w.clock.now)
     h.tick()
@@ -141,18 +136,6 @@ def test_no_update_when_same_sha_or_no_release(tmp_path):
     w.clock.now += 100
     h.tick()
     assert w.downloads == 0
-
-
-def test_update_disabled_without_public_key(tmp_path):
-    w = World(tmp_path, key="", manifest=release())
-    h = w.helper(); h.tick()
-    assert w.downloads == 0 and not h.finished
-
-
-def test_forged_signature_never_downloaded(tmp_path):
-    w = World(tmp_path, manifest=release(secret=bytes(range(1, 33))))
-    h = w.helper(); h.tick()
-    assert w.downloads == 0 and not h.finished and any("tidak valid" in l for l in h.log)
 
 
 def test_tampered_download_rejected_then_retried_later(tmp_path):
@@ -214,7 +197,7 @@ def test_failed_update_marker_blacklists_release(tmp_path):
 
 # --- ganti nama komputer -----------------------------------------------------------
 def test_rename_applied_and_reported_once(tmp_path):
-    w = World(tmp_path, key="")     # tidak butuh kunci pembaruan
+    w = World(tmp_path)     # tidak butuh kunci pembaruan
     w.rename = {"name": "lab-01"}
     h = w.helper(); h.tick()
     assert w.renamed == ["LAB-01"] and w.reports == [("LAB-01", True, "")]
@@ -243,7 +226,7 @@ def test_rename_to_current_name_only_reports(tmp_path):
 
 @pytest.mark.parametrize("bad", ["", "a b", "-x", "12345", "a" * 16, "x;calc", 7, None])
 def test_rename_invalid_names_ignored(tmp_path, bad):
-    w = World(tmp_path, key="")
+    w = World(tmp_path)
     w.rename = {"name": bad}
     h = w.helper(); h.tick()
     assert w.renamed == [] and w.reports == []
