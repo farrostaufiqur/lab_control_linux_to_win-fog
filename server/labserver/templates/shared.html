@@ -82,10 +82,31 @@ function render() {
       <td>${statusCell(pc)}</td></tr>`).join("") || `<tr><td colspan="3" class="text-muted">Belum ada komputer.</td></tr>`;
   }
   $("#sh-usage").textContent = `${files.length} file · ${size(state.total_size)} dari ${size(limits.total)} (maks ${size(limits.file)} per file)`;
-  $("#sh-list").innerHTML = files.map((f) => `<tr><td>${esc(f.path)}</td><td>${size(f.size)}</td><td>${dateTime(f.mtime)}</td>
+  renderList();
+}
+
+// daftar file: unggahan yang sedang berjalan tampil di atas, dengan progres bar, sebelum masuk daftar
+const queue = [];                                  // {name, path, loaded, total, note, error, control}
+let listFrame = 0;
+const renderListSoon = () => { if (!listFrame) listFrame = requestAnimationFrame(() => { listFrame = 0; renderList(); }); };
+
+function uploadRow(u, i) {
+  const pct = u.total ? Math.floor(u.loaded * 100 / u.total) : 0;
+  const state = u.error ? `<span class="text-danger">Gagal: ${esc(u.error)}</span>`
+    : `${pct}% · ${size(u.loaded)} dari ${size(u.total)}${u.note ? " · " + esc(u.note) : ""}`;
+  const bar = `<div class="progress mt-1" style="height:8px"><div class="progress-bar ${u.error ? "bg-danger" : ""}" role="progressbar"
+      style="width:${u.error ? 100 : pct}%" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"></div></div>`;
+  return `<tr class="table-active"><td>${esc(u.path)}<span class="badge badge-light-primary ms-2">${u.error ? "gagal" : u.loaded ? "mengunggah" : "menunggu"}</span>${bar}</td>
+    <td>${size(u.total)}</td><td class="small">${state}</td>
+    <td class="text-end"><button class="btn btn-sm btn-outline-secondary" data-up-cancel="${i}">${u.error ? "Tutup" : "Batal"}</button></td></tr>`;
+}
+
+function renderList() {
+  if (!state) return;
+  const rows = queue.map(uploadRow).join("") + state.files.map((f) => `<tr><td>${esc(f.path)}</td><td>${size(f.size)}</td><td>${dateTime(f.mtime)}</td>
     <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/api/shared/file?path=${encodeURIComponent(f.path)}">Unduh</a>
-    <button class="btn btn-sm btn-outline-danger" data-del="${esc(f.path)}">Hapus</button></td></tr>`).join("")
-    || `<tr><td colspan="4" class="text-muted">Folder pusat masih kosong.</td></tr>`;
+    <button class="btn btn-sm btn-outline-danger" data-del="${esc(f.path)}">Hapus</button></td></tr>`).join("");
+  $("#sh-list").innerHTML = rows || `<tr><td colspan="4" class="text-muted">Folder pusat masih kosong.</td></tr>`;
 }
 
 async function refresh() {
@@ -118,21 +139,48 @@ document.addEventListener("click", async (e) => {
   catch (err) { setErr(err.message); }
 });
 
-$("#sh-upload").onclick = async () => {
-  const files = [...$("#sh-files").files], msg = $("#sh-up-msg");
-  const sub = $("#sh-sub").value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-  if (!files.length) { msg.textContent = "Pilih file dulu."; return; }
-  let done = 0;
-  for (const file of files) {
-    msg.textContent = `Mengunggah ${done + 1}/${files.length}: ${file.name}…`;
-    const res = await fetch("/api/shared/file?path=" + encodeURIComponent((sub ? sub + "/" : "") + file.name), {
-      method: "POST", body: file, headers: { "Content-Type": "application/octet-stream", "X-Lab-Admin": "1" } });
-    if (res.status === 401) { location.href = "/login?next=/pembagian"; return; }
-    if (!res.ok) { msg.textContent = `Gagal (${file.name}): ` + ((await res.json().catch(() => ({}))).error || res.statusText); refresh(); return; }
-    done++;
+let running = false;
+async function runQueue() {
+  if (running) return;
+  running = true;
+  for (let item = queue.find((u) => !u.error && !u.started); item; item = queue.find((u) => !u.error && !u.started)) {
+    item.started = true;
+    try {
+      await chunkedUpload(item.file, { kind: "shared", path: item.path }, (loaded, total, note) => {
+        Object.assign(item, { loaded, total, note }); renderListSoon();
+      }, item.control);
+      queue.splice(queue.indexOf(item), 1);
+      await refresh();
+    } catch (e) {
+      if (item.control.cancelled) queue.splice(queue.indexOf(item), 1);
+      else Object.assign(item, { error: e.message });
+      renderList();
+    }
   }
-  msg.textContent = `${done} file terunggah ✓`; $("#sh-files").value = ""; refresh();
+  running = false;
+  $("#sh-up-msg").textContent = queue.some((u) => u.error) ? "Ada unggahan yang gagal." : "Selesai ✓";
+}
+
+$("#sh-upload").onclick = () => {
+  const files = [...$("#sh-files").files];
+  const sub = $("#sh-sub").value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!files.length) { $("#sh-up-msg").textContent = "Pilih file dulu."; return; }
+  for (const file of files) {
+    queue.push({ file, name: file.name, path: (sub ? sub + "/" : "") + file.name, loaded: 0, total: file.size, note: "", error: "", control: {} });
+  }
+  $("#sh-files").value = ""; $("#sh-up-msg").textContent = "";
+  renderList(); runQueue();
 };
+
+document.addEventListener("click", (e) => {
+  const cancel = e.target.closest("[data-up-cancel]");
+  if (!cancel) return;
+  const item = queue[Number(cancel.dataset.upCancel)];
+  if (!item) return;
+  if (item.error || !item.started) queue.splice(queue.indexOf(item), 1);       // belum jalan atau sudah gagal: cukup buang
+  else item.control.cancelled = true;                                           // sedang jalan: berhenti di potongan berikutnya
+  renderList();
+});
 
 refresh(); setInterval(refresh, 5000);
 </script>

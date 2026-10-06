@@ -3,8 +3,9 @@
 {% block content %}
 <div class="page-head"><h4>Pembaruan agent</h4></div>
 <div class="alert alert-warning" id="rel-wan" hidden>
-    Dashboard ini dibuka lewat internet. Mengunggah <code>labagent.exe</code> (sekitar 18 MB) lewat jalur ini lambat dan bisa gagal.
-    Buka dashboard lewat alamat LAN server (mis. <code>http://192.168.x.x:8080/pembaruan</code>) untuk mengunggah.
+    Dashboard ini dibuka lewat internet. Mengunggah <code>labagent.exe</code> (sekitar 18 MB) lewat jalur ini bisa sangat lambat bila koneksi server
+    lemah. Unggahan dikirim per potongan dan otomatis dilanjutkan bila putus, tetapi lewat alamat LAN server
+    (mis. <code>http://192.168.x.x:8080/pembaruan</code>) selesai dalam hitungan detik.
 </div>
 <div class="widget-box card">
     <p id="rel-status">Memuat…</p>
@@ -21,6 +22,7 @@
         <button class="btn btn-outline-danger" id="rel-stop">Hentikan distribusi</button>
         <span class="text-muted" id="rel-msg"></span>
     </div>
+    <div class="progress mt-3" id="rel-bar" style="height:10px" hidden><div class="progress-bar" role="progressbar" style="width:0%"></div></div>
 </div>
 <div class="widget-box card">
     <h5 class="mb-3">Versi agent per PC</h5>
@@ -53,37 +55,27 @@ async function refresh() {
 const isLan = /^(localhost$|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
 $("#rel-wan").hidden = isLan;
 
-function sendRelease(exe, version, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/release?" + new URLSearchParams({ version }));
-    xhr.setRequestHeader("Content-Type", "application/octet-stream");
-    xhr.setRequestHeader("X-Lab-Admin", "1");
-    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded, e.total);
-    xhr.onload = () => {
-      if (xhr.status === 401) { location.href = "/login?next=/pembaruan"; return; }
-      if (xhr.status >= 200 && xhr.status < 300) return resolve();
-      let text = xhr.statusText;
-      try { text = JSON.parse(xhr.responseText).error || text; } catch (e) { /* bukan JSON: pesan dari proxy */ }
-      reject(new Error(`${text} (HTTP ${xhr.status})`));
-    };
-    xhr.onerror = () => reject(new Error("koneksi terputus saat mengunggah" + (isLan ? "" : "; jalur internet lambat, buka lewat alamat LAN server")));
-    xhr.send(exe);
-  });
-}
-
 $("#rel-upload").onclick = async () => {
-  const msg = $("#rel-msg"), exe = $("#rel-exe").files[0], version = $("#rel-version").value.trim();
+  const msg = $("#rel-msg"), bar = $("#rel-bar"), exe = $("#rel-exe").files[0], version = $("#rel-version").value.trim();
   if (!exe) { msg.textContent = "Pilih labagent.exe."; return; }
   if (!confirm(`Unggah ${exe.name}${version ? " v" + version : ""}? Semua PC akan memperbarui agent secara otomatis.`)) return;
   const mb = (n) => (n / 1048576).toFixed(1);
-  msg.textContent = "Mengunggah 0%…";
   $("#rel-upload").disabled = true;
+  bar.hidden = false; bar.firstElementChild.style.width = "0%"; bar.firstElementChild.classList.remove("bg-danger");
+  msg.textContent = "Mengunggah 0%…";
   try {
-    await sendRelease(exe, version, (loaded, total) => { msg.textContent = `Mengunggah ${Math.round(loaded * 100 / total)}% (${mb(loaded)} dari ${mb(total)} MB)…`; });
+    await chunkedUpload(exe, { kind: "release", version }, (loaded, total, note) => {
+      const pct = Math.floor(loaded * 100 / total);
+      bar.firstElementChild.style.width = pct + "%";
+      msg.textContent = `Mengunggah ${pct}% (${mb(loaded)} dari ${mb(total)} MB)${note ? " · " + note : ""}`;
+    });
+    bar.firstElementChild.style.width = "100%";
     msg.textContent = "Rilis aktif ✓ PC memperbarui dalam 1-3 menit";
     $("#rel-exe").value = ""; $("#rel-version").value = ""; refresh();
-  } catch (e) { msg.textContent = "Gagal: " + e.message; }
+  } catch (e) {
+    bar.firstElementChild.classList.add("bg-danger");
+    msg.textContent = "Gagal: " + e.message;
+  }
   $("#rel-upload").disabled = false;
 };
 $("#rel-stop").onclick = async () => {

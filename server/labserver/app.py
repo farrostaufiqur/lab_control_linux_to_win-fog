@@ -17,7 +17,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 from flask.sessions import SecureCookieSessionInterface
 from werkzeug.exceptions import HTTPException
 
-from . import policy, release, shared
+from . import policy, release, shared, uploads
 from .config import Config
 from .db import Store
 
@@ -76,6 +76,7 @@ def create_app(cfg: Config) -> Flask:
         return isinstance(value, str) and hmac.compare_digest(value, password_fingerprint())
 
     shots_dir = Path(cfg.db_path).parent / "screenshots"
+    upload_sessions = uploads.Uploads(Path(cfg.db_path).parent / "uploads")
     shared_files = shared.SharedFiles(Path(cfg.db_path).parent / "shared", store)
     shared_status: dict[str, dict] = {}       # laporan sinkron terakhir tiap PC (di memori saja)
 
@@ -454,15 +455,22 @@ def create_app(cfg: Config) -> Flask:
     @app.post("/api/release")
     def api_release_post():
         admin_only()
-        version = request.args.get("version", "").strip()
+        version = clean_version(request.args.get("version"))
+        request.max_content_length = release.MAX_RELEASE_BYTES
+        return commit_release(request.stream, version)
+
+    def clean_version(raw):
+        version = str(raw or "").strip()
         if version and not release.VERSION_RE.match(version):
             abort(400, "versi: 1-32 karakter huruf, angka, titik, garis bawah, atau tanda hubung")
-        request.max_content_length = release.MAX_RELEASE_BYTES
+        return version
+
+    def commit_release(stream, version):
         releases_dir.mkdir(parents=True, exist_ok=True)
         tmp = releases_dir / f"upload-{secrets.token_hex(6)}.tmp"
         try:
             try:
-                sha, size = release.sha_of_stream(request.stream, tmp, release.MAX_RELEASE_BYTES)
+                sha, size = release.sha_of_stream(stream, tmp, release.MAX_RELEASE_BYTES)
             except ValueError:
                 abort(413, "berkas terlalu besar")
             with open(tmp, "rb") as f:
@@ -478,6 +486,79 @@ def create_app(cfg: Config) -> Flask:
         release.prune_files(releases_dir, sha)
         store.add_event("*", "info", f"Admin mengunggah rilis agent {version} ({sha[:12]})")
         return jsonify(ok=True, release=info)
+
+    # unggah per potongan (dashboard) -----------------------------------
+    def upload_or_404(uid):
+        meta = upload_sessions.meta(uid)
+        if meta is None:
+            abort(404, "sesi unggah tidak ada atau sudah kedaluwarsa")
+        return meta
+
+    @app.post("/api/uploads")
+    def api_upload_create():
+        admin_only()
+        body = request.get_json(silent=True) or {}
+        kind, size = body.get("kind"), body.get("size")
+        if type(size) is not int or size <= 0:
+            abort(400, "size wajib diisi (byte)")
+        if kind == "shared":
+            target, limit = shared.clean_path(body.get("path")), shared.MAX_FILE_BYTES
+            if target is None:
+                abort(400, "path file tidak valid")
+        elif kind == "release":
+            target, limit = clean_version(body.get("version")), release.MAX_RELEASE_BYTES
+        else:
+            abort(400, "kind tidak dikenal")
+        if size > limit:
+            abort(413, f"berkas lebih dari {limit // 1048576} MB")
+        uid = upload_sessions.create({"kind": kind, "target": target, "size": size}, time.time())
+        if uid is None:
+            abort(409, "terlalu banyak unggahan yang belum selesai; coba lagi nanti")
+        return jsonify(id=uid, chunk=min(uploads.CHUNK_MAX_BYTES, 1024 * 1024))
+
+    @app.get("/api/uploads/<uid>")
+    def api_upload_status(uid):
+        admin_only()
+        meta = upload_or_404(uid)
+        return jsonify(received=upload_sessions.received(uid), size=meta["size"])
+
+    @app.put("/api/uploads/<uid>")
+    def api_upload_chunk(uid):
+        admin_only()
+        meta = upload_or_404(uid)
+        offset = _int(request.args.get("offset"), 0, meta["size"])
+        if offset is None:
+            abort(400, "offset tidak valid")
+        request.max_content_length = uploads.CHUNK_MAX_BYTES
+        status, received = upload_sessions.append(uid, offset, request.stream, meta["size"])
+        if status == "too_big":
+            abort(413, "potongan melebihi ukuran yang dijanjikan")
+        # offset tidak sesuai (mis. potongan sebelumnya sebenarnya sudah masuk): beri tahu posisi sebenarnya
+        return jsonify(received=received, resync=status == "offset"), (409 if status == "offset" else 200)
+
+    @app.post("/api/uploads/<uid>/finish")
+    def api_upload_finish(uid):
+        admin_only()
+        meta = upload_or_404(uid)
+        if upload_sessions.received(uid) != meta["size"]:
+            abort(409, f"belum lengkap: {upload_sessions.received(uid)} dari {meta['size']} byte")
+        try:
+            with open(upload_sessions.part_path(uid), "rb") as stream:
+                if meta["kind"] == "shared":
+                    status, entry = shared_files.put(meta["target"], stream, time.time(), None, time.time())
+                    if status != "ok":
+                        shared_error(status)
+                    store.add_event("*", "info", f"Admin mengunggah ke folder bersama: {meta['target']}")
+                    return jsonify(ok=True, **entry)
+                return commit_release(stream, meta["target"])
+        finally:
+            upload_sessions.remove(uid)
+
+    @app.delete("/api/uploads/<uid>")
+    def api_upload_abort(uid):
+        admin_only()
+        upload_sessions.remove(uid) if upload_sessions.meta(uid) else None
+        return jsonify(ok=True)
 
     @app.delete("/api/release")
     def api_release_delete():

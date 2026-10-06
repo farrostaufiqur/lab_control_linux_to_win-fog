@@ -75,3 +75,5 @@ agent/deploy/prompt_*.txt
 agent/kunci-publik.txt
 agent/deploy/install-vm.conf
 agent-vm.zip
+server/shared/
+server/uploads/

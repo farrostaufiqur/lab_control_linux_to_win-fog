@@ -120,7 +120,7 @@ Cukup unggah `labagent.exe` hasil build lewat dashboard, semua PC memperbarui ag
 Tiap rilis:
 1. Klik dua kali `agent\deploy\build.cmd` (hasil: `agent\deploy\labagent.exe`).
 2. Di dashboard buka **Pembaruan agent**, pilih `labagent.exe`, isi versi bila mau (kosong = `build-<8 huruf SHA>`), klik **Unggah rilis**.
-Unggah dari alamat **LAN** server (`http://192.168.x.x:8080/pembaruan`): berkas sekitar 18 MB itu lewat internet (`lab.fog.tf`) sangat lambat bila koneksi server sedang lemah, dan halaman memperingatkan bila dibuka lewat internet. Kemajuan unggah tampil dalam persen.
+Unggah dari alamat **LAN** server (`http://192.168.x.x:8080/pembaruan`): berkas sekitar 18 MB itu lewat internet (`lab.fog.tf`) sangat lambat bila koneksi server sedang lemah, dan halaman memperingatkan bila dibuka lewat internet. Unggahan dikirim per potongan dan dilanjutkan otomatis bila putus; kemajuan tampil dengan progres bar.
 3. Pantau tabel "Versi agent per PC": status berubah dari "menunggu pembaruan" menjadi "terbaru".
 
 Lewat skrip: `curl -u admin:... -H 'X-Lab-Admin: 1' -H 'Content-Type: application/octet-stream' --data-binary @labagent.exe "$LAB_URL/api/release?version=1.2.1"`.
@@ -144,7 +144,7 @@ Satu folder pusat di server disinkronkan ke folder di tiap komputer (halaman **F
 | Dua arah | perubahan dan hapus di mana pun saling menyebar. Bila dua sisi mengubah file yang sama, waktu ubah terbaru menang; file yang diubah menang atas file yang dihapus. |
 
 Contoh: komputer A dua arah, B terima saja, C kirim saja. File dari C muncul di server, lalu di A dan B. B menghapus file: tidak berefek. C atau A menghapus file: terhapus di server dan di komputer yang menerima.
-- **Admin** mengunggah, mengunduh, dan menghapus file pusat dari halaman yang sama. Batas: 100 MB per file, 2 GB total, 2000 file, nama aman untuk Windows (tanpa `<>:"|?*\`, nama sistem seperti `con`, atau titik/spasi di akhir). `desktop.ini`, `Thumbs.db`, `~$*`, dan `*.labtmp` tidak disinkronkan.
+- **Admin** mengunggah, mengunduh, dan menghapus file pusat dari halaman yang sama. Unggahan dikirim per potongan 1 MB dan otomatis dilanjutkan bila koneksi putus (sampai 8 kali percobaan), jadi berkas besar tetap bisa masuk lewat jalur yang lambat. Tiap berkas yang sedang diunggah tampil di daftar dengan progres bar, lalu menjadi baris biasa setelah selesai; tombol Batal menghentikannya. Batas: 100 MB per file, 2 GB total, 2000 file, nama aman untuk Windows (tanpa `<>:"|?*\`, nama sistem seperti `con`, atau titik/spasi di akhir). `desktop.ini`, `Thumbs.db`, `~$*`, dan `*.labtmp` tidak disinkronkan.
 - **Pengaman:** file yang baru diubah (kurang dari 2 detik) ditunda sampai selesai ditulis; folder yang hilang dipulihkan, bukan dianggap "semua file dihapus"; penghapusan massal ke server (lebih dari 5 file dan separuh isi sekaligus) ditahan dan dilaporkan; unduhan diverifikasi SHA-256; tautan/junction tidak diikuti. Tidak ada tempat sampah: file yang dihapus di server hilang.
 - Status sinkron tiap komputer (OK / gagal) tampil di halaman itu, dan ringkasan perubahan masuk ke log PC.
 - Bila folder bersama itu sendiri dihapus di satu komputer, agent menganggap komputer itu belum punya folder: dibuat ulang dan file diunduh lagi (mode terima/dua arah). Tidak ada file yang dihapus di server atau komputer lain. Menghapus subfolder atau file di dalamnya tetap penghapusan biasa.

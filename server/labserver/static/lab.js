@@ -135,3 +135,60 @@ function logHtml(rows, names) {
   return rows.map((r) => `<div><span class="t">${dateTime(r.ts)}</span>` +
     `<span class="pc">${esc(r.pc === "*" ? "Semua" : (names && names[r.pc]) || r.pc)}</span>${esc(r.detail)}</div>`).join("");
 }
+
+// unggah berkas besar per potongan, bisa lanjut bila koneksi putus (lihat labserver/uploads.py) -------------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const fatalError = (message) => Object.assign(new Error(message), { fatal: true });
+
+function sendChunk(uid, offset, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", `/api/uploads/${uid}?offset=${offset}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader("X-Lab-Admin", "1");
+    xhr.timeout = 120000;
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (e) { /* bukan JSON (galat proxy) */ }
+      if (xhr.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return reject(fatalError("sesi berakhir")); }
+      if (xhr.status === 200 || (xhr.status === 409 && body.resync)) return resolve(body.received);
+      if (xhr.status >= 400 && xhr.status < 500) return reject(fatalError(body.error || xhr.statusText));
+      reject(new Error(`HTTP ${xhr.status}`));          // 5xx dari proxy/server: coba lagi
+    };
+    xhr.onerror = () => reject(new Error("koneksi terputus"));
+    xhr.ontimeout = () => reject(new Error("waktu habis"));
+    xhr.send(blob);
+  });
+}
+
+// target: {kind:"shared", path} atau {kind:"release", version}. onProgress(terkirim, total, catatan).
+// control.cancelled = true menghentikan unggahan dan membuang potongan di server.
+async function chunkedUpload(file, target, onProgress, control = {}) {
+  const { id, chunk } = await api("/api/uploads", "POST", { ...target, size: file.size });
+  const retries = 8;
+  let offset = 0, failures = 0;
+  while (offset < file.size) {
+    if (control.cancelled) { api(`/api/uploads/${id}`, "DELETE").catch(() => {}); throw fatalError("dibatalkan"); }
+    try {
+      const base = offset;
+      offset = await sendChunk(id, offset, file.slice(offset, offset + chunk), (n) => onProgress(base + n, file.size, ""));
+      failures = 0;
+      onProgress(offset, file.size, "");
+    } catch (e) {
+      if (e.fatal) { api(`/api/uploads/${id}`, "DELETE").catch(() => {}); throw e; }
+      if (++failures > retries) throw new Error("koneksi terputus berulang kali: " + e.message);
+      onProgress(offset, file.size, `koneksi bermasalah, mencoba lagi (${failures}/${retries})…`);
+      await sleep(Math.min(20000, 1500 * failures));
+      try { offset = (await api(`/api/uploads/${id}`)).received; } catch (e2) { /* masih putus: kirim ulang dari posisi terakhir */ }
+    }
+  }
+  for (let attempt = 1; ; attempt++) {
+    try { return await api(`/api/uploads/${id}/finish`, "POST"); }
+    catch (e) {
+      if (!(e instanceof TypeError) || attempt >= retries) throw e;      // hanya galat jaringan yang diulang
+      onProgress(file.size, file.size, "menyelesaikan, mencoba lagi…");
+      await sleep(1500 * attempt);
+    }
+  }
+}
