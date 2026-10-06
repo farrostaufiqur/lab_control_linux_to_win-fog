@@ -3,7 +3,7 @@
   Memasang agent di PC client. Cara termudah: klik dua kali install.cmd (meminta hak Administrator sendiri).
   Atau dari PowerShell Administrator:
     .\install.ps1 -ServerUrl http://192.168.1.10:8080 -Token <agent_token>
-  Parameter yang tidak diberikan dibaca dari install.conf di folder ini (baris Kunci=Nilai; -Config <berkas> untuk
+  Parameter yang tidak diberikan dibaca dari install.conf di folder ini (baris Kunci=Nilai; -ConfigFile <berkas> untuk
   berkas lain, mis. install-vm.cmd memakai install-vm.conf; ExemptUsers=nama1,nama2 mengecualikan user dari penguncian). Bila ServerUrl/Token
   tetap kosong, skrip menanyakannya lalu menyimpannya ke install.conf supaya PC berikutnya tinggal klik.
 #>
@@ -14,12 +14,12 @@ param(
     [string[]]$ExemptUsers = @("administrator", "admin", "labadmin"),
     [ValidateSet("lock", "unlock")][string]$OfflineBootPolicy = "lock",
     [string]$KillFileName = "",   # opsional: nama file rahasia untuk pemulihan darurat (lihat README)
-    [string]$Config = ""          # opsional: berkas pengaturan selain install.conf
+    [string]$ConfigFile = ""      # opsional: berkas pengaturan selain install.conf (jangan dinamai $Config: bentrok dengan variabel config.json di bawah)
 )
 $ErrorActionPreference = "Stop"
 
 # install.conf: berisi token, jangan dibagikan atau di-commit
-$confPath = if ($Config) { $Config } else { Join-Path $PSScriptRoot "install.conf" }
+$confPath = if ($ConfigFile) { $ConfigFile } else { Join-Path $PSScriptRoot "install.conf" }
 $conf = @{}
 if (Test-Path $confPath) {
     foreach ($line in Get-Content $confPath) {

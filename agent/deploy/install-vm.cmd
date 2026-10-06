@@ -11,7 +11,7 @@ pause
 exit /b
 
 :admin
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Config "%~dp0install-vm.conf"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -ConfigFile "%~dp0install-vm.conf"
 if errorlevel 1 echo GAGAL. Baca pesan di atas.
 echo.
 pause

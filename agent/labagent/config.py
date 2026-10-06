@@ -27,6 +27,8 @@ def default_path() -> Path:
 def load(path: Path | None = None) -> AgentConfig:
     path = path or default_path()
     raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} rusak (isinya bukan objek JSON): pasang ulang dengan install.cmd")
     known = AgentConfig.__dataclass_fields__
     values = {k: v for k, v in raw.items() if k in known}
     if "exempt_users" in values:
