@@ -99,6 +99,8 @@ Token=<agent_token>
 KillFileName=
 OfflineBootPolicy=lock
 ```
+`install.conf` juga boleh berisi `ExemptUsers=nama1,nama2` (user yang tidak pernah dikunci). Untuk pemasangan dengan pengaturan lain, mis. VM Windows di server, pakai `install-vm.cmd` yang membaca `install-vm.conf` (alamat server dari dalam VM: `http://192.168.122.1:8080`).
+
 Bila berkas itu belum ada, pemasangan pertama menanyakan isinya lalu menyimpannya, sehingga PC berikutnya (folder yang sama di flashdisk) tinggal klik. `install.conf` berisi token: jangan dibagikan atau di-commit.
 
 ### Syarat agar kunci sulit dilewati

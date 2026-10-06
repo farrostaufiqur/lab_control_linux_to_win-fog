@@ -3,7 +3,8 @@
   Memasang agent di PC client. Cara termudah: klik dua kali install.cmd (meminta hak Administrator sendiri).
   Atau dari PowerShell Administrator:
     .\install.ps1 -ServerUrl http://192.168.1.10:8080 -Token <agent_token>
-  Parameter yang tidak diberikan dibaca dari install.conf di folder ini (baris Kunci=Nilai). Bila ServerUrl/Token
+  Parameter yang tidak diberikan dibaca dari install.conf di folder ini (baris Kunci=Nilai; -Config <berkas> untuk
+  berkas lain, mis. install-vm.cmd memakai install-vm.conf; ExemptUsers=nama1,nama2 mengecualikan user dari penguncian). Bila ServerUrl/Token
   tetap kosong, skrip menanyakannya lalu menyimpannya ke install.conf supaya PC berikutnya tinggal klik.
 #>
 param(
@@ -12,12 +13,13 @@ param(
     [string]$Exe = "$PSScriptRoot\labagent.exe",
     [string[]]$ExemptUsers = @("administrator", "admin", "labadmin"),
     [ValidateSet("lock", "unlock")][string]$OfflineBootPolicy = "lock",
-    [string]$KillFileName = ""    # opsional: nama file rahasia untuk pemulihan darurat (lihat README)
+    [string]$KillFileName = "",   # opsional: nama file rahasia untuk pemulihan darurat (lihat README)
+    [string]$Config = ""          # opsional: berkas pengaturan selain install.conf
 )
 $ErrorActionPreference = "Stop"
 
 # install.conf: berisi token, jangan dibagikan atau di-commit
-$confPath = Join-Path $PSScriptRoot "install.conf"
+$confPath = if ($Config) { $Config } else { Join-Path $PSScriptRoot "install.conf" }
 $conf = @{}
 if (Test-Path $confPath) {
     foreach ($line in Get-Content $confPath) {
@@ -27,6 +29,9 @@ if (Test-Path $confPath) {
 if (-not $ServerUrl)       { $ServerUrl = [string]$conf["ServerUrl"] }
 if (-not $Token)           { $Token = [string]$conf["Token"] }
 if (-not $KillFileName)    { $KillFileName = [string]$conf["KillFileName"] }
+if (-not $PSBoundParameters.ContainsKey("ExemptUsers") -and $conf["ExemptUsers"]) {
+    $ExemptUsers = @($conf["ExemptUsers"] -split '\s*,\s*' | Where-Object { $_ })
+}
 if (-not $PSBoundParameters.ContainsKey("OfflineBootPolicy") -and $conf["OfflineBootPolicy"] -in "lock", "unlock") {
     $OfflineBootPolicy = $conf["OfflineBootPolicy"]
 }
@@ -35,7 +40,7 @@ if (-not $ServerUrl -or -not $Token) {
     if (-not $ServerUrl) { $ServerUrl = (Read-Host "Alamat server (mis. http://192.168.1.10:8080 atau https://lab.contoh.com)").Trim() }
     if (-not $Token)     { $Token = (Read-Host "Token agent (agent_token di config.toml server)").Trim() }
     if (-not $KillFileName)    { $KillFileName = (Read-Host "Nama file pemulihan darurat (Enter = tidak dipakai)").Trim() }
-    @("ServerUrl=$ServerUrl", "Token=$Token", "KillFileName=$KillFileName",
+    @("ServerUrl=$ServerUrl", "Token=$Token", "KillFileName=$KillFileName", "ExemptUsers=$($ExemptUsers -join ',')",
       "OfflineBootPolicy=$OfflineBootPolicy") | Set-Content -Path $confPath -Encoding ASCII
 }
 if ($ServerUrl -notmatch '^https?://') { throw "ServerUrl harus diawali http:// atau https://" }
