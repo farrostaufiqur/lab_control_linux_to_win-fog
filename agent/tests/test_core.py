@@ -246,7 +246,11 @@ def test_screenshot_sent_at_interval_while_unlocked(env):
     assert agent.screenshot_once() is False          # belum waktunya
     clock.now += 31
     agent.poll_once()
-    assert agent.screenshot_once() is True and platform.grabs == 2
+    assert agent.screenshot_once() is False and platform.grabs == 2    # diambil lagi, tetapi sama: tidak dikirim
+    platform.screenshot = lambda: b"\xff\xd8\xffgambar-baru"
+    clock.now += 31
+    agent.poll_once()
+    assert agent.screenshot_once() is True and len(server.uploads) == 2
 
 
 def test_no_screenshot_when_locked_or_disabled(env):
@@ -301,3 +305,59 @@ def test_requests_carry_own_user_agent():
     from labagent import VERSION
     from labagent.core import agent_headers
     assert agent_headers("t")["User-Agent"] == f"LabAgent/{VERSION}"
+
+
+def test_unchanged_screenshot_not_resent_until_keepalive(env):
+    clock, server, platform, make = env
+    shots(platform)
+    server.reply["screenshot_interval"] = 10
+    agent = make()
+    agent.poll_once()
+    assert agent.screenshot_once() is True
+    for _ in range(3):                               # layar sama persis: tidak ada unggahan baru
+        clock.now += 11
+        agent.poll_once()
+        assert agent.screenshot_once() is False
+    assert len(server.uploads) == 1
+    shots(platform, b"\xff\xd8\xffberubah")           # layar berubah: langsung dikirim
+    clock.now += 11
+    agent.poll_once()
+    assert agent.screenshot_once() is True and len(server.uploads) == 2
+    clock.now += 125                                  # gambar sama, tetapi sudah lama: kirim ulang sebagai penanda hidup
+    agent.poll_once()
+    assert agent.screenshot_once() is True and len(server.uploads) == 3
+
+
+def test_screenshot_resent_after_being_disabled_and_enabled(env):
+    clock, server, platform, make = env
+    shots(platform)
+    server.reply["screenshot_interval"] = 10
+    agent = make()
+    agent.poll_once()
+    assert agent.screenshot_once() is True
+    server.reply["screenshot_interval"] = 0           # server membuang gambar saat dimatikan
+    clock.now += 11
+    agent.poll_once()
+    server.reply["screenshot_interval"] = 10
+    clock.now += 11
+    agent.poll_once()
+    assert agent.screenshot_once() is True and len(server.uploads) == 2
+
+
+def test_failed_upload_is_retried_even_if_image_is_the_same(env):
+    clock, server, platform, make = env
+    shots(platform)
+    server.reply["screenshot_interval"] = 10
+    attempts = []
+
+    def flaky(url, data, token):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("jaringan putus")
+    agent = Agent(AgentConfig(server_url="http://x", token="t", state_dir="/nonexistent-x"), platform,
+                  post=server, clock=clock, upload=flaky, lan_ip=lambda: "")
+    agent.poll_once()
+    assert agent.screenshot_once() is False
+    clock.now += 11
+    agent.poll_once()
+    assert agent.screenshot_once() is True and len(attempts) == 2

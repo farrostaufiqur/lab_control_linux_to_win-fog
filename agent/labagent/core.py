@@ -3,6 +3,7 @@
 The Windows-specific parts (window info, shutdown) are injected through `platform`, so this
 module can be tested on any OS.
 """
+import hashlib
 import json
 import os
 import secrets
@@ -22,6 +23,7 @@ MAX_QUEUED_EVENTS = 1000
 EVENTS_PER_POLL = 100
 IGNORED_PROCESSES = {"", "labagent.exe", "lockapp.exe", "searchhost.exe", "shellexperiencehost.exe"}
 TITLE_EVENT_MIN_GAP = 15.0  # seconds between title-change events inside the same app
+SHOT_RESEND_SECONDS = 120.0  # gambar yang sama persis tidak dikirim ulang, kecuali sudah selama ini
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,7 @@ class Agent:
         self._exe_sha_cache: str | None = None
         self._shot_interval = 0.0          # detik; 0 = server belum meminta screenshot
         self._next_shot = 0.0
+        self._last_shot: tuple[bytes, float] | None = None   # (hash gambar terakhir terkirim, waktu kirim)
         self._shot_error = ""
 
         self._state_file = Path(cfg.state_dir) / "state.json"
@@ -212,6 +215,8 @@ class Agent:
             self._lab_name = reply.get("lab_name", self._lab_name)
             self._warn_seconds = int(reply.get("warn_seconds", self._warn_seconds))
             self._shot_interval = max(0.0, float(reply.get("screenshot_interval") or 0))
+            if self._shot_interval <= 0:
+                self._last_shot = None          # dimatikan lalu dinyalakan lagi: server sudah membuang gambarnya
         self._save_state()
         for action in reply.get("commands", []):
             self.power(action)
@@ -237,11 +242,15 @@ class Agent:
         if not data or self.view().locked:           # terkunci selagi mengambil gambar: buang
             return False
         self._shot_error = ""
+        digest = hashlib.sha1(data).digest()
+        if self._last_shot and self._last_shot[0] == digest and now - self._last_shot[1] < SHOT_RESEND_SECONDS:
+            return False                         # layar tidak berubah: hemat jaringan dan beban server
         url = self.cfg.server_url.rstrip("/") + "/api/agent/screenshot?host=" + urllib.parse.quote(self.host)
         try:
             self._upload(url, data, self.cfg.token)
         except Exception:
             return False
+        self._last_shot = (digest, now)
         return True
 
     def run_screenshots(self, stop: threading.Event):
