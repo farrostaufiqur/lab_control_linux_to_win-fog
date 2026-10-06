@@ -85,6 +85,7 @@ def main():
     stop = threading.Event()
     threading.Thread(target=agent.run_forever, args=(stop,), daemon=True).start()
     threading.Thread(target=agent.run_screenshots, args=(stop,), daemon=True).start()
+    threading.Thread(target=agent.run_shared, args=(stop,), daemon=True).start()
     try:
         Overlay(agent, winapi, cfg).run()
     finally:

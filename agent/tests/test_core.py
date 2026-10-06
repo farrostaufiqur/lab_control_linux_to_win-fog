@@ -361,3 +361,118 @@ def test_failed_upload_is_retried_even_if_image_is_the_same(env):
     clock.now += 11
     agent.poll_once()
     assert agent.screenshot_once() is True and len(attempts) == 2
+
+
+# --- folder bersama -------------------------------------------------------------------------------
+class SharedWorld:
+    """Agent dengan klien folder bersama tiruan; server tiruan mengembalikan aturan lewat balasan poll."""
+
+    def __init__(self, tmp_path, mode="receive", path="Desktop/shared", server_url="http://192.168.1.17:8080"):
+        self.clock, self.platform = Clock(), FakePlatform()
+        self.profile = tmp_path / "profil"
+        self.platform.profile_dir = lambda: str(self.profile)
+        self.files = {}                                  # isi folder pusat tiruan
+        self.reply = {"locked": False, "message": "", "changes_in": None, "commands": [], "poll_interval": 5,
+                      "warn_seconds": 300, "lab_name": "Lab", "shared": {"mode": mode, "path": path, "interval": 10}}
+        self.bodies = []
+        world = self
+
+        class Client:
+            def __init__(self, url, token, host): world.client_args = (url, token, host)
+            def index(self):
+                import hashlib
+                return {p: {"sha256": hashlib.sha256(d).hexdigest(), "size": len(d), "mtime": 1_700_000_000.0}
+                        for p, d in world.files.items()}
+            def download(self, path): yield world.files[path]
+            def upload(self, *a): raise AssertionError("tidak boleh mengunggah")
+            def delete(self, *a): raise AssertionError("tidak boleh menghapus")
+
+        def post(url, body, token):
+            self.bodies.append(body)
+            return dict(self.reply)
+        cfg = AgentConfig(server_url=server_url, token="t", state_dir=str(tmp_path / "state"))
+        self.agent = Agent(cfg, self.platform, post=post, clock=self.clock, lan_ip=lambda: "",
+                           shared_client=Client, is_local=lambda url: url.startswith("http://192.168."))
+
+    def poll(self):
+        assert self.agent.poll_once()
+
+
+def test_shared_follows_server_rules_and_logs_summary(tmp_path):
+    w = SharedWorld(tmp_path)
+    assert w.agent.shared_once() is False                # belum pernah terhubung: tidak menyinkronkan
+    w.poll()
+    w.files["tugas/a.txt"] = b"isi"
+    assert w.agent.shared_once() is True
+    assert (w.profile / "Desktop" / "shared" / "tugas" / "a.txt").read_bytes() == b"isi"
+    assert w.client_args == ("http://192.168.1.17:8080", "t", "PC-01")
+    w.poll()
+    shared = w.bodies[-1]["shared"]
+    assert shared == {"ok": True, "files": 1, "error": ""}
+    details = [e["detail"] for body in w.bodies for e in body["events"]]
+    w.poll()
+    details += [e["detail"] for e in w.bodies[-1]["events"]]
+    assert "Folder bersama: 1 diunduh" in details
+
+
+def test_shared_off_or_without_path_does_nothing(tmp_path):
+    for mode, path in (("off", "Desktop/shared"), ("both", "")):
+        w = SharedWorld(tmp_path / mode, mode=mode, path=path)
+        w.poll()
+        w.files["a"] = b"x"
+        assert w.agent.shared_once() is False
+        assert not (w.profile).exists() and w.bodies[-1]["shared"] is None
+
+
+def test_shared_never_runs_through_non_lan_server(tmp_path):
+    w = SharedWorld(tmp_path, server_url="https://lab.fog.tf")
+    w.poll()
+    w.files["a"] = b"x"
+    assert w.agent.shared_once() is False and not w.profile.exists()
+    w.poll()
+    status = w.bodies[-1]["shared"]
+    assert status["ok"] is False and "LAN" in status["error"]
+
+
+def test_shared_rejects_unsafe_folder_from_server(tmp_path):
+    for bad in ("../x", "C:/Windows", "a/../b"):
+        w = SharedWorld(tmp_path / bad.replace("/", "_").replace(":", "_"), path=bad)
+        w.poll()
+        w.files["a"] = b"x"
+        assert w.agent.shared_once() is False
+        w.poll()
+        assert w.bodies[-1]["shared"]["error"] == "folder tujuan tidak valid"
+
+
+def test_shared_error_logged_once_and_recovers(tmp_path):
+    w = SharedWorld(tmp_path)
+    w.poll()
+    boom = {"on": True}
+    original = w.agent._shared_client
+
+    class Broken:
+        def __init__(self, *a): pass
+        def index(self):
+            if boom["on"]:
+                raise OSError("server menolak")
+            return {}
+    w.agent._shared_client = Broken
+    for _ in range(3):
+        assert w.agent.shared_once() is False
+    w.poll()
+    details = [e["detail"] for e in w.bodies[-1]["events"] if "Folder bersama" in e["detail"]]
+    assert len(details) == 1 and "server menolak" in details[0]
+    boom["on"] = False
+    w.agent.shared_once()
+    w.poll()
+    assert w.bodies[-1]["shared"]["ok"] is True
+
+
+def test_poll_reply_clamps_shared_interval_and_ignores_garbage(tmp_path):
+    w = SharedWorld(tmp_path)
+    w.reply["shared"] = {"mode": "both", "path": "Desktop/s", "interval": 1}
+    w.poll()
+    assert w.agent._shared_cfg == {"mode": "both", "path": "Desktop/s", "interval": 5.0}
+    w.reply["shared"] = {"mode": "terserah", "path": "x"}
+    w.poll()
+    assert w.agent._shared_cfg["mode"] == "both"                 # balasan aneh diabaikan

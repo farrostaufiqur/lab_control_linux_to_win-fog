@@ -18,6 +18,8 @@ from pathlib import Path
 
 from . import VERSION
 from .config import AgentConfig
+from .nethttp import agent_headers  # noqa: F401  (dipakai juga oleh main.py)
+from . import sharedsync
 
 MAX_QUEUED_EVENTS = 1000
 EVENTS_PER_POLL = 100
@@ -36,11 +38,6 @@ class View:
     warn_seconds: int
     exempt: bool
     notice: str = ""        # admin message shown on the lock screen
-
-
-def agent_headers(token: str, content_type: str = "application/json") -> dict:
-    # Cloudflare menolak User-Agent bawaan urllib ("Python-urllib", error 1010), jadi pakai nama sendiri.
-    return {"Content-Type": content_type, "X-Agent-Token": token, "User-Agent": f"LabAgent/{VERSION}"}
 
 
 def http_post_json(url: str, body: dict, token: str, timeout: float = 5.0) -> dict:
@@ -67,9 +64,14 @@ def local_ip() -> str:
 
 class Agent:
     def __init__(self, cfg: AgentConfig, platform, post=http_post_json, clock=time.time,
-                 upload=http_post_bytes, lan_ip=local_ip):
+                 upload=http_post_bytes, lan_ip=local_ip, shared_client=sharedsync.HttpSharedClient,
+                 is_local=sharedsync.is_local_url):
         self.cfg, self.platform, self._post, self._clock = cfg, platform, post, clock
         self._upload, self._lan_ip = upload, lan_ip
+        self._shared_client, self._is_local = shared_client, is_local
+        self._shared_cfg = {"mode": "off", "path": "", "interval": 10.0}   # dari jawaban server
+        self._shared_status: dict | None = None                            # dilaporkan ke server lewat poll
+        self._shared_error_logged = ""
         self.host = platform.hostname()
         self.user = platform.username()
         self.exempt = self.user.lower() in cfg.exempt_users
@@ -195,6 +197,7 @@ class Agent:
             "version": VERSION,
             "exe_sha": self._exe_sha(),
             "lan_ip": self._lan_ip(),
+            "shared": self._shared_status,
             "events": batch,
         }
         try:
@@ -215,6 +218,10 @@ class Agent:
             self._lab_name = reply.get("lab_name", self._lab_name)
             self._warn_seconds = int(reply.get("warn_seconds", self._warn_seconds))
             self._shot_interval = max(0.0, float(reply.get("screenshot_interval") or 0))
+            shared = reply.get("shared")
+            if isinstance(shared, dict) and shared.get("mode") in ("off", *sharedsync.MODES):
+                self._shared_cfg = {"mode": shared["mode"], "path": str(shared.get("path") or ""),
+                                    "interval": min(300.0, max(5.0, float(shared.get("interval") or 10)))}
             if self._shot_interval <= 0:
                 self._last_shot = None          # dimatikan lalu dinyalakan lagi: server sudah membuang gambarnya
         self._save_state()
@@ -258,6 +265,51 @@ class Agent:
         while not stop.wait(1.0):
             try:
                 self.screenshot_once()
+            except Exception:
+                pass
+
+    # folder bersama ------------------------------------------------------
+    def shared_once(self) -> bool:
+        """Satu putaran sinkron folder bersama sesuai aturan dari server. True bila ada file yang berubah."""
+        mode, path = self._shared_cfg["mode"], self._shared_cfg["path"]
+        if mode == "off" or not path:
+            self._shared_status = None
+            return False
+        if not self.view().connected:
+            return False
+        if not self._is_local(self.cfg.server_url):
+            self._set_shared_status(False, 0, "folder bersama hanya lewat LAN; alamat server ini bukan LAN")
+            return False
+        profile = getattr(self.platform, "profile_dir", lambda: "")()
+        folder = sharedsync.resolve_folder(profile, path) if profile else None
+        if folder is None:
+            self._set_shared_status(False, 0, "folder tujuan tidak valid")
+            return False
+        try:
+            client = self._shared_client(self.cfg.server_url, self.cfg.token, self.host)
+            result = sharedsync.FolderSync(Path(self.cfg.state_dir) / "shared.json", self._clock).run(folder, mode, client)
+        except Exception as exc:
+            self._set_shared_status(False, 0, f"{type(exc).__name__}: {exc}"[:200])
+            return False
+        error = "; ".join(result.errors[:3])
+        self._set_shared_status(not result.errors, result.files, error)
+        if result.changed:
+            self.add_event("info", "Folder bersama: " + result.summary())
+        return result.changed > 0
+
+    def _set_shared_status(self, ok: bool, files: int, error: str):
+        self._shared_status = {"ok": ok, "files": files, "error": error}
+        if error and error != self._shared_error_logged:      # catat sekali per jenis galat
+            self._shared_error_logged = error
+            self.add_event("info", f"Folder bersama gagal: {error}")
+        elif not error:
+            self._shared_error_logged = ""
+
+    def run_shared(self, stop: threading.Event):
+        """Utas terpisah: transfer file yang lambat tidak boleh menunda status kunci."""
+        while not stop.wait(self._shared_cfg["interval"]):
+            try:
+                self.shared_once()
             except Exception:
                 pass
 

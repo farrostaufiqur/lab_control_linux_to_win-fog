@@ -128,6 +128,23 @@ Cara kerja: pembantu bertanya ke server tiap 60 detik; bila SHA-256 exe rilis be
 
 Pembaruan berjalan lewat jalur yang sama dengan agent (LAN, atau tunnel bila diizinkan). PC yang masih memakai agent lama (sebelum v1.2.0) harus dipasang ulang sekali dengan `install.cmd`; setelah itu pembaruan otomatis.
 
+## Folder bersama
+Satu folder pusat di server disinkronkan ke folder di tiap komputer (halaman **Folder bersama** di dashboard). Dicek tiap 10 detik, **hanya lewat LAN**: server menolak (404) permintaan lewat Cloudflare, dan agent tidak menyinkronkan bila alamat servernya bukan LAN.
+- **Folder tujuan** diisi di dashboard, relatif terhadap profil pengguna Windows (mis. `Desktop/shared` menjadi `C:\Users\<pengguna>\Desktop\shared`). Dibuat otomatis bila belum ada. Kosong = fitur mati. Agent tidak pernah menulis di luar profil pengguna.
+- **Aturan tiap komputer** (atau satu aturan bawaan untuk semua):
+
+| Aturan | Perilaku |
+|---|---|
+| Mati | tidak ada sinkron |
+| Terima saja | mengikuti server. Mengubah atau menghapus file di komputer itu tidak berpengaruh ke server; file dikembalikan. File yang dihapus admin di server ikut terhapus di komputer. |
+| Kirim saja | file baru/ubah dikirim ke server, dan file yang dihapus di komputer itu dihapus di server. Perubahan lain di server tidak diterima. |
+| Dua arah | perubahan dan hapus di mana pun saling menyebar. Bila dua sisi mengubah file yang sama, waktu ubah terbaru menang; file yang diubah menang atas file yang dihapus. |
+
+Contoh: komputer A dua arah, B terima saja, C kirim saja. File dari C muncul di server, lalu di A dan B. B menghapus file: tidak berefek. C atau A menghapus file: terhapus di server dan di komputer yang menerima.
+- **Admin** mengunggah, mengunduh, dan menghapus file pusat dari halaman yang sama. Batas: 100 MB per file, 2 GB total, 2000 file, nama aman untuk Windows (tanpa `<>:"|?*\`, nama sistem seperti `con`, atau titik/spasi di akhir). `desktop.ini`, `Thumbs.db`, `~$*`, dan `*.labtmp` tidak disinkronkan.
+- **Pengaman:** file yang baru diubah (kurang dari 2 detik) ditunda sampai selesai ditulis; folder yang hilang dipulihkan, bukan dianggap "semua file dihapus"; penghapusan massal ke server (lebih dari 5 file dan separuh isi sekaligus) ditahan dan dilaporkan; unduhan diverifikasi SHA-256; tautan/junction tidak diikuti. Tidak ada tempat sampah: file yang dihapus di server hilang.
+- Status sinkron tiap komputer (OK / gagal) tampil di halaman itu, dan ringkasan perubahan masuk ke log PC.
+
 ## Nama PC
 - Tombol **Nama**: nama tampilan di dashboard saja (tidak mengubah Windows).
 - Tombol **Nama Windows**: mengganti nama komputer Windows sungguhan. Server menawarkan permintaan itu ke pembantu SYSTEM di PC (butuh agent v1.2.0 ke atas dengan pembantu berjalan), yang memanggil `SetComputerNameExW`. Nama baru berlaku **setelah PC restart** (bisa dipilih restart otomatis). Aturan nama: maks 15 huruf/angka/tanda `-`, tidak boleh angka semua, disimpan huruf besar.

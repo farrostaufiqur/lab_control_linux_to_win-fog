@@ -13,7 +13,15 @@ CREATE TABLE IF NOT EXISTS pcs (
     locked INTEGER, version TEXT, exe_sha TEXT,
     override TEXT,
     alias TEXT,
-    shot_ts REAL                  -- waktu screenshot terakhir diterima
+    shot_ts REAL,                 -- waktu screenshot terakhir diterima
+    shared_mode TEXT              -- aturan folder bersama: off|receive|send|both; NULL = ikut bawaan
+);
+CREATE TABLE IF NOT EXISTS shared_files (
+    path TEXT PRIMARY KEY,        -- relatif, gaya POSIX
+    sha256 TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime REAL NOT NULL,          -- waktu ubah file asli (untuk memutus konflik: yang terbaru menang)
+    updated REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +67,7 @@ class Store:
         with self.tx() as db:
             db.executescript(SCHEMA)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(pcs)")}
-            for column, kind in (("exe_sha", "TEXT"), ("alias", "TEXT"), ("shot_ts", "REAL")):  # database lama
+            for column, kind in (("exe_sha", "TEXT"), ("alias", "TEXT"), ("shot_ts", "REAL"), ("shared_mode", "TEXT")):  # database lama
                 if column not in columns:
                     db.execute(f"ALTER TABLE pcs ADD COLUMN {column} {kind}")
         self._last_prune = 0.0
@@ -130,6 +138,26 @@ class Store:
         with self.tx() as db:
             return db.execute("UPDATE pcs SET shot_ts=? WHERE id=?", (ts, pc_id)).rowcount > 0
 
+    def set_shared_mode(self, pc_id: str, mode: str | None) -> bool:
+        with self.tx() as db:
+            return db.execute("UPDATE pcs SET shared_mode=? WHERE id=?", (mode, pc_id)).rowcount > 0
+
+    # folder bersama ---------------------------------------------------
+    def shared_index(self) -> dict:
+        with self.tx() as db:
+            return {r["path"]: {"sha256": r["sha256"], "size": r["size"], "mtime": r["mtime"]}
+                    for r in db.execute("SELECT * FROM shared_files ORDER BY path")}
+
+    def shared_set(self, path: str, sha: str, size: int, mtime: float, now: float) -> None:
+        with self.tx() as db:
+            db.execute("INSERT INTO shared_files(path, sha256, size, mtime, updated) VALUES(?, ?, ?, ?, ?) "
+                       "ON CONFLICT(path) DO UPDATE SET sha256=excluded.sha256, size=excluded.size, "
+                       "mtime=excluded.mtime, updated=excluded.updated", (path, sha, size, mtime, now))
+
+    def shared_remove(self, path: str) -> None:
+        with self.tx() as db:
+            db.execute("DELETE FROM shared_files WHERE path=?", (path,))
+
     def clear_shots(self) -> None:
         with self.tx() as db:
             db.execute("UPDATE pcs SET shot_ts=NULL")
@@ -168,9 +196,10 @@ class Store:
             if req is None or req["old"] == new:
                 return None
             old = req["old"]
-            prev = db.execute("SELECT alias, override FROM pcs WHERE id=?", (old,)).fetchone()
+            prev = db.execute("SELECT alias, override, shared_mode FROM pcs WHERE id=?", (old,)).fetchone()
             if prev is not None:
-                db.execute("UPDATE pcs SET alias=?, override=? WHERE id=?", (prev["alias"], prev["override"], new))
+                db.execute("UPDATE pcs SET alias=?, override=?, shared_mode=? WHERE id=?",
+                           (prev["alias"], prev["override"], prev["shared_mode"], new))
             db.execute("UPDATE OR IGNORE events SET pc=? WHERE pc=?", (new, old))
             db.execute("UPDATE OR IGNORE notices SET pc=? WHERE pc=?", (new, old))
             db.execute("DELETE FROM pcs WHERE id=?", (old,))

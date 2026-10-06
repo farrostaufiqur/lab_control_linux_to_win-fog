@@ -36,6 +36,12 @@ Untuk saat server tidak bisa dipakai dan PC lab tidak bisa dibuka. `labagent.exe
 - IP di dashboard = `lan_ip` yang dilaporkan agent; tanpa itu, alamat koneksi (`Cf-Connecting-Ip` bila lewat tunnel).
 - Uji tampilan: Chromium Playwright di `~/.cache/ms-playwright` butuh `LD_LIBRARY_PATH=~/.local/opt/drawio/libs/usr/lib/x86_64-linux-gnu`.
 
+## Folder bersama
+- Server: `labserver/shared.py` (validasi nama, `SharedFiles` = file di `<folder db>/shared/files/` + tabel `shared_files`), endpoint agent `/api/agent/shared/{index,file}` (token, **selalu 404 bila lewat Cloudflare**, izin per aturan PC: index = receive/send/both, unduh = receive/both, unggah/hapus = send/both), admin `/api/shared*` dan halaman `/pembagian`. Aturan per PC di kolom `pcs.shared_mode` (NULL = bawaan di settings `shared`); poll membawa `shared: {mode, path, interval}`; status sinkron agent ada di memori (`shared_status`).
+- Agent: `labagent/sharedsync.py` (`decide` = tabel keputusan dari SHA lokal/server/base, `FolderSync`, `HttpSharedClient`, `is_local_url`), dipanggil `core.Agent.shared_once` di utas `run_shared`. `base` (SHA terakhir tersinkron) disimpan di `state_dir\shared.json`; hapus = file ada di base tetapi hilang di satu sisi. Aturan nama di agent dan server harus sama (dicek `test_path_rules_match_agent`).
+- Hapus di mode kirim/dua arah menghapus di server; mode terima tidak. Tidak ada tempat sampah (sengaja, sesuai permintaan pemilik).
+- Belum dicoba di Windows: `WindowsPlatform.profile_dir` (`USERPROFILE`), penggantian file yang sedang dibuka aplikasi lain, dan junction. Uji di dua PC: aturan berbeda, ubah/hapus file, matikan jaringan lalu nyalakan.
+
 ## Mengoperasikan lab lewat API
 Kredensial lewat variabel lingkungan, jangan ditulis ke file:
 ```bash

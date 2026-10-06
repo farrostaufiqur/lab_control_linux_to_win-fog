@@ -17,7 +17,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 from flask.sessions import SecureCookieSessionInterface
 from werkzeug.exceptions import HTTPException
 
-from . import policy, release
+from . import policy, release, shared
 from .config import Config
 from .db import Store
 
@@ -76,6 +76,20 @@ def create_app(cfg: Config) -> Flask:
         return isinstance(value, str) and hmac.compare_digest(value, password_fingerprint())
 
     shots_dir = Path(cfg.db_path).parent / "screenshots"
+    shared_files = shared.SharedFiles(Path(cfg.db_path).parent / "shared", store)
+    shared_status: dict[str, dict] = {}       # laporan sinkron terakhir tiap PC (di memori saja)
+
+    def shared_settings():
+        saved = store.get_setting("shared", {}) or {}
+        mode = saved.get("default_mode")
+        return {"path": saved.get("path") if isinstance(saved.get("path"), str) else "",
+                "default_mode": mode if mode in shared.MODES else "off"}
+
+    def shared_mode_for(row):
+        """Aturan efektif PC ini: miliknya sendiri, atau bawaan; mati bila folder tujuan belum diisi."""
+        if not shared_settings()["path"]:
+            return "off"
+        return row["shared_mode"] if row["shared_mode"] in shared.MODES else shared_settings()["default_mode"]
 
     # helpers -------------------------------------------------------------
     def shot_interval():
@@ -239,6 +253,10 @@ def create_app(cfg: Config) -> Flask:
             "version": _text(data.get("version"), 32),
             "exe_sha": _text(data.get("exe_sha"), 64) or None,
         }
+        status = data.get("shared")
+        if isinstance(status, dict):
+            shared_status[host] = {"ok": bool(status.get("ok")), "files": _int(status.get("files")) or 0,
+                                   "error": _text(status.get("error"), 200) or "", "at": now}
         events = []
         for raw in (data.get("events") or [])[:MAX_EVENTS_PER_POLL]:
             if not isinstance(raw, dict) or raw.get("type") not in EVENT_TYPES:
@@ -276,6 +294,8 @@ def create_app(cfg: Config) -> Flask:
             "commands": commands,
             "poll_interval": cfg.poll_interval,
             "screenshot_interval": shot_interval(),
+            "shared": {"mode": shared_mode_for(pc_row), "path": shared_settings()["path"],
+                       "interval": shared.SYNC_SECONDS},
             "warn_seconds": cfg.warn_seconds,
             "lab_name": cfg.lab_name,
         })
@@ -298,6 +318,75 @@ def create_app(cfg: Config) -> Flask:
         os.replace(tmp, shots_dir / f"{host}.jpg")
         store.set_shot(host, time.time())
         return jsonify(ok=True, stored=True)
+
+    # folder bersama (agent) ----------------------------------------------
+    def shared_agent(need):
+        """Izin sinkron: token, hanya LAN, PC dikenal, dan aturan PC mengizinkan `need` (index | read | write)."""
+        agent_only()
+        if via_tunnel():
+            abort(404)                          # folder bersama tidak pernah dilayani lewat Cloudflare
+        host = request.args.get("host", "")
+        row = store.get_pc(host) if HOST_RE.match(host) else None
+        if row is None:
+            abort(404)
+        mode = shared_mode_for(row)
+        allowed = {"index": ("receive", "send", "both"), "read": ("receive", "both"), "write": ("send", "both")}[need]
+        if mode not in allowed:
+            abort(403, "aturan folder bersama komputer ini tidak mengizinkan")
+        return row
+
+    def shared_path_arg():
+        path = shared.clean_path(request.args.get("path", ""))
+        if path is None:
+            abort(400, "path file tidak valid")
+        return path
+
+    def shared_error(status):
+        codes = {"too_big": (413, f"file lebih dari {shared.MAX_FILE_BYTES // 1048576} MB"),
+                 "total_full": (413, f"folder bersama penuh ({shared.MAX_TOTAL_BYTES // 1024 ** 3} GB)"),
+                 "too_many": (413, f"maksimal {shared.MAX_FILES} file"),
+                 "conflict": (409, "file berubah di server; coba lagi"),
+                 "name_clash": (409, "nama bentrok dengan file/folder lain (huruf besar-kecil dianggap sama)")}
+        code, text = codes[status]
+        abort(code, text)
+
+    def mtime_arg():
+        try:
+            value = float(request.args.get("mtime", ""))
+        except ValueError:
+            return time.time()
+        return min(value, time.time() + 60) if value > 0 else time.time()
+
+    @app.get("/api/agent/shared/index")
+    def agent_shared_index():
+        shared_agent("index")
+        return jsonify({"files": shared_files.index()})
+
+    @app.get("/api/agent/shared/file")
+    def agent_shared_get():
+        shared_agent("read")
+        target = shared_files.file_path(shared_path_arg())
+        if target is None:
+            abort(404)
+        return send_from_directory(target.parent, target.name, mimetype="application/octet-stream", max_age=0)
+
+    @app.put("/api/agent/shared/file")
+    def agent_shared_put():
+        shared_agent("write")
+        path = shared_path_arg()
+        request.max_content_length = shared.MAX_FILE_BYTES
+        status, entry = shared_files.put(path, request.stream, mtime_arg(), request.args.get("expect"), time.time())
+        if status != "ok":
+            shared_error(status)
+        return jsonify(ok=True, **entry)
+
+    @app.delete("/api/agent/shared/file")
+    def agent_shared_delete():
+        shared_agent("write")
+        status = shared_files.delete(shared_path_arg(), request.args.get("expect"))
+        if status == "conflict":
+            shared_error(status)
+        return jsonify(ok=True)
 
     # rilis agent ---------------------------------------------------------
     releases_dir = Path(cfg.db_path).parent / "releases"
@@ -491,6 +580,80 @@ def create_app(cfg: Config) -> Flask:
         response = send_from_directory(shots_dir, f"{pc_id}.jpg", mimetype="image/jpeg", max_age=0)
         response.headers["Cache-Control"] = "private, max-age=300"   # URL memuat ?t=<waktu>, jadi aman di-cache
         return response
+
+    @app.get("/pembagian")
+    def page_shared():
+        return page("shared.html", "shared")
+
+    @app.get("/api/shared")
+    def api_shared():
+        admin_only()
+        now, files = time.time(), shared_files.index()
+        pcs = []
+        for row in store.list_pcs():
+            status = shared_status.get(row["id"])
+            pcs.append({"id": row["id"], "name": row["alias"] or row["id"],
+                        "online": now - row["last_seen"] <= cfg.online_timeout,
+                        "mode": row["shared_mode"] if row["shared_mode"] in shared.MODES else None,
+                        "effective": shared_mode_for(row),
+                        "status": {**status, "age": now - status["at"]} if status else None})
+        return jsonify({"settings": shared_settings(), "modes": shared.MODE_LABELS,
+                        "files": [{"path": p, **e} for p, e in files.items()],
+                        "total_size": sum(e["size"] for e in files.values()),
+                        "limits": {"file": shared.MAX_FILE_BYTES, "total": shared.MAX_TOTAL_BYTES, "files": shared.MAX_FILES},
+                        "pcs": pcs, "sync_seconds": shared.SYNC_SECONDS})
+
+    @app.put("/api/shared/settings")
+    def api_shared_settings():
+        admin_only()
+        body = request.get_json(silent=True) or {}
+        path, mode = shared.clean_profile_path(body.get("path", "")), body.get("default_mode", "off")
+        if path is None:
+            abort(400, "folder tujuan: path relatif di profil user, mis. Desktop/shared (tanpa .. atau huruf drive)")
+        if mode not in shared.MODES:
+            abort(400, "aturan bawaan tidak dikenal")
+        store.set_setting("shared", {"path": path, "default_mode": mode})
+        store.add_event("*", "info", f"Admin mengatur folder bersama: {path or '(mati)'} · bawaan {shared.MODE_LABELS[mode]}")
+        return jsonify(ok=True)
+
+    @app.put("/api/pcs/<pc_id>/shared-mode")
+    def api_pc_shared_mode(pc_id):
+        admin_only()
+        pc_or_404(pc_id)
+        mode = (request.get_json(silent=True) or {}).get("mode")
+        if mode not in (*shared.MODES, "default"):
+            abort(400, "aturan tidak dikenal")
+        store.set_shared_mode(pc_id, None if mode == "default" else mode)
+        store.add_event(pc_id, "info", "Admin mengatur folder bersama: " + ("ikut bawaan" if mode == "default" else shared.MODE_LABELS[mode]))
+        return jsonify(ok=True)
+
+    @app.get("/api/shared/file")
+    def api_shared_download():
+        admin_only()
+        path = shared_path_arg()
+        target = shared_files.file_path(path)
+        if target is None:
+            abort(404)
+        return send_from_directory(target.parent, target.name, as_attachment=True, download_name=target.name, max_age=0)
+
+    @app.post("/api/shared/file")
+    def api_shared_upload():
+        admin_only()
+        path = shared_path_arg()
+        request.max_content_length = shared.MAX_FILE_BYTES
+        status, entry = shared_files.put(path, request.stream, time.time(), None, time.time())
+        if status != "ok":
+            shared_error(status)
+        store.add_event("*", "info", f"Admin mengunggah ke folder bersama: {path}")
+        return jsonify(ok=True, **entry)
+
+    @app.delete("/api/shared/file")
+    def api_shared_delete():
+        admin_only()
+        path = shared_path_arg()
+        shared_files.delete(path, None)
+        store.add_event("*", "info", f"Admin menghapus dari folder bersama: {path}")
+        return jsonify(ok=True)
 
     @app.get("/api/pcs")
     def api_pcs():

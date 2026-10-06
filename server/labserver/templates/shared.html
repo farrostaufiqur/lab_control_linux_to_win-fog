@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Folder bersama{% endblock %}
+{% block content %}
+<div class="page-head"><h4>Folder bersama</h4></div>
+
+<div class="widget-box card">
+    <h5 class="mb-2">Folder di komputer</h5>
+    <p class="text-muted">Isi file di server ini disinkronkan ke folder di profil pengguna tiap komputer, dicek tiap
+        <span id="sync-seconds">10</span> detik. Hanya lewat LAN: komputer yang terhubung lewat internet (Cloudflare) tidak menyinkronkan.
+        Folder dibuat otomatis bila belum ada. Kosongkan untuk mematikan fitur ini di semua komputer.</p>
+    <div class="row g-3 align-items-end">
+        <div class="col-md-5"><label class="form-label" for="sh-path">Folder (relatif terhadap profil pengguna)</label>
+            <input class="form-control" id="sh-path" placeholder="Desktop/shared" maxlength="200"></div>
+        <div class="col-md-4"><label class="form-label" for="sh-default">Aturan bawaan komputer</label>
+            <select class="form-select" id="sh-default"></select></div>
+        <div class="col-md-3 d-flex gap-2 align-items-center">
+            <button class="btn btn-primary" id="sh-save">Simpan</button><span class="text-muted" id="sh-msg"></span></div>
+    </div>
+    <ul class="text-muted small mt-3 mb-0">
+        <li><b>Terima saja</b>: komputer mengikuti server. Hapus atau ubah file di komputer itu tidak berpengaruh ke server; file dikembalikan.</li>
+        <li><b>Kirim saja</b>: perubahan dan hapus di komputer itu dikirim ke server (dan ke komputer lain yang menerima). Perubahan lain tidak diterima.</li>
+        <li><b>Dua arah</b>: perubahan dan hapus di mana pun saling menyebar. Bila dua sisi mengubah file yang sama, yang terbaru menang.</li>
+    </ul>
+</div>
+
+<div class="widget-box card">
+    <h5 class="mb-3">Aturan per komputer</h5>
+    <div class="table-responsive"><table class="table table-hover mb-0">
+        <thead><tr><th>Komputer</th><th>Aturan</th><th>Status sinkron</th></tr></thead>
+        <tbody id="sh-pcs"><tr><td colspan="3" class="text-muted">Memuat…</td></tr></tbody>
+    </table></div>
+</div>
+
+<div class="widget-box card">
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <h5 class="mb-0 me-auto">File di server</h5><span class="text-muted" id="sh-usage"></span>
+    </div>
+    <div class="row g-2 align-items-end mb-3">
+        <div class="col-md-5"><label class="form-label" for="sh-files">Unggah file</label>
+            <input class="form-control" type="file" id="sh-files" multiple></div>
+        <div class="col-md-4"><label class="form-label" for="sh-sub">Ke subfolder (boleh kosong)</label>
+            <input class="form-control" id="sh-sub" placeholder="mis. materi/bab1" maxlength="150"></div>
+        <div class="col-md-3 d-flex gap-2 align-items-center">
+            <button class="btn btn-primary" id="sh-upload">Unggah</button><span class="text-muted small" id="sh-up-msg"></span></div>
+    </div>
+    <div class="table-responsive"><table class="table table-hover mb-0">
+        <thead><tr><th>File</th><th>Ukuran</th><th>Diubah</th><th></th></tr></thead>
+        <tbody id="sh-list"><tr><td colspan="4" class="text-muted">Memuat…</td></tr></tbody>
+    </table></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const MODE_ORDER = ["off", "receive", "send", "both"];
+let state = null;
+const size = (n) => n >= 1073741824 ? (n / 1073741824).toFixed(1).replace(/\.0$/, "") + " GB" : n >= 1048576 ? (n / 1048576).toFixed(1).replace(/\.0$/, "") + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B";
+
+function statusCell(pc) {
+  if (pc.effective === "off") return `<span class="text-muted">mati</span>`;
+  const s = pc.status;
+  if (!s) return `<span class="text-muted">${pc.online ? "menunggu laporan" : "offline"}</span>`;
+  const age = s.age < 60 ? Math.round(s.age) + " dtk lalu" : Math.round(s.age / 60) + " mnt lalu";
+  return s.ok ? `<span class="badge badge-light-success">OK</span> ${s.files} file · ${age}`
+    : `<span class="badge badge-light-danger">Gagal</span> ${esc(s.error)} · ${age}`;
+}
+
+function render() {
+  const { settings, modes, pcs, files, limits } = state;
+  $("#sync-seconds").textContent = state.sync_seconds;
+  if (document.activeElement !== $("#sh-path")) $("#sh-path").value = settings.path;
+  const options = MODE_ORDER.map((m) => `<option value="${m}">${modes[m]}</option>`).join("");
+  if (!$("#sh-default").options.length) $("#sh-default").innerHTML = options;
+  if (document.activeElement !== $("#sh-default")) $("#sh-default").value = settings.default_mode;
+
+  if (!$("#sh-pcs select:focus")) {
+    $("#sh-pcs").innerHTML = pcs.map((pc) => `<tr>
+      <td><span class="dot ${pc.online ? "on" : ""}"></span><a href="/pc/${encodeURIComponent(pc.id)}">${esc(pc.name)}</a></td>
+      <td><select class="form-select form-select-sm w-auto" data-pc="${esc(pc.id)}">
+        <option value="default" ${pc.mode === null ? "selected" : ""}>Ikut bawaan (${esc(modes[settings.default_mode])})</option>
+        ${MODE_ORDER.map((m) => `<option value="${m}" ${pc.mode === m ? "selected" : ""}>${esc(modes[m])}</option>`).join("")}</select></td>
+      <td>${statusCell(pc)}</td></tr>`).join("") || `<tr><td colspan="3" class="text-muted">Belum ada komputer.</td></tr>`;
+  }
+  $("#sh-usage").textContent = `${files.length} file · ${size(state.total_size)} dari ${size(limits.total)} (maks ${size(limits.file)} per file)`;
+  $("#sh-list").innerHTML = files.map((f) => `<tr><td>${esc(f.path)}</td><td>${size(f.size)}</td><td>${dateTime(f.mtime)}</td>
+    <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/api/shared/file?path=${encodeURIComponent(f.path)}">Unduh</a>
+    <button class="btn btn-sm btn-outline-danger" data-del="${esc(f.path)}">Hapus</button></td></tr>`).join("")
+    || `<tr><td colspan="4" class="text-muted">Folder pusat masih kosong.</td></tr>`;
+}
+
+async function refresh() {
+  try { state = await api("/api/shared"); render(); setErr(""); }
+  catch (e) { setErr("Server tidak terjangkau: " + e.message); }
+}
+
+$("#sh-save").onclick = async () => {
+  const path = $("#sh-path").value.trim();
+  if (!path && !confirm("Matikan folder bersama untuk semua komputer?")) return;
+  try {
+    await api("/api/shared/settings", "PUT", { path, default_mode: $("#sh-default").value });
+    $("#sh-msg").textContent = "Tersimpan ✓"; refresh();
+  } catch (e) { $("#sh-msg").textContent = "Gagal: " + e.message; }
+  setTimeout(() => ($("#sh-msg").textContent = ""), 4000);
+};
+
+document.addEventListener("change", async (e) => {
+  const select = e.target.closest("select[data-pc]");
+  if (!select) return;
+  try { await api(`${pcUrl(select.dataset.pc)}/shared-mode`, "PUT", { mode: select.value }); setErr(""); }
+  catch (err) { setErr(err.message); }
+  select.blur(); refresh();
+});
+
+document.addEventListener("click", async (e) => {
+  const del = e.target.closest("[data-del]");
+  if (!del || !confirm(`Hapus ${del.dataset.del} dari folder pusat? Komputer yang menerima ikut menghapusnya.`)) return;
+  try { await api("/api/shared/file?path=" + encodeURIComponent(del.dataset.del), "DELETE"); refresh(); }
+  catch (err) { setErr(err.message); }
+});
+
+$("#sh-upload").onclick = async () => {
+  const files = [...$("#sh-files").files], msg = $("#sh-up-msg");
+  const sub = $("#sh-sub").value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!files.length) { msg.textContent = "Pilih file dulu."; return; }
+  let done = 0;
+  for (const file of files) {
+    msg.textContent = `Mengunggah ${done + 1}/${files.length}: ${file.name}…`;
+    const res = await fetch("/api/shared/file?path=" + encodeURIComponent((sub ? sub + "/" : "") + file.name), {
+      method: "POST", body: file, headers: { "Content-Type": "application/octet-stream", "X-Lab-Admin": "1" } });
+    if (res.status === 401) { location.href = "/login?next=/pembagian"; return; }
+    if (!res.ok) { msg.textContent = `Gagal (${file.name}): ` + ((await res.json().catch(() => ({}))).error || res.statusText); refresh(); return; }
+    done++;
+  }
+  msg.textContent = `${done} file terunggah ✓`; $("#sh-files").value = ""; refresh();
+};
+
+refresh(); setInterval(refresh, 5000);
+</script>
+{% endblock %}

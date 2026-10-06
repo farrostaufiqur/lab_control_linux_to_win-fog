@@ -59,6 +59,9 @@ class WindowsPlatform:
     def hostname(self) -> str:
         return os.environ.get("COMPUTERNAME", "unknown")
 
+    def profile_dir(self) -> str:
+        return os.environ.get("USERPROFILE", "")
+
     def username(self) -> str:
         return os.environ.get("USERNAME", "unknown")
 
