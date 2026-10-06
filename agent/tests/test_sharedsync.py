@@ -356,13 +356,31 @@ def test_state_survives_restart_and_folder_change_resets_it(tmp_path, server):
     assert "a.txt" in server.files and other.read("a.txt") == b"isi"             # tidak dianggap dihapus
 
 
-def test_too_many_files_stops_sync(tmp_path, server, monkeypatch):
-    monkeypatch.setattr(sharedsync, "MAX_FILES", 3)
+def test_no_file_count_or_size_limits_on_the_agent(tmp_path, server):
     pc = PC(tmp_path, server, "send")
-    for i in range(5):
-        pc.write(f"f{i}.txt", b"x")
+    for i in range(60):
+        pc.write(f"f{i}.txt", b"x%d" % i)
+    pc.write("besar.bin", b"B" * (5 * 1024 * 1024))
     result = pc.sync()
-    assert server.files == {} and any("lebih dari" in e for e in result.errors)
+    assert result.errors == [] and len(server.files) == 61
+    assert not hasattr(sharedsync, "MAX_FILE_BYTES") and not hasattr(sharedsync, "MAX_FILES")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="chmod tidak berarti di Windows")
+def test_unreadable_subfolder_never_deletes_its_files_on_the_server(tmp_path, server):
+    import os as _os
+    if _os.geteuid() == 0:
+        pytest.skip("root bisa membaca semuanya")
+    server.put("rahasia/a.txt", b"1"); server.put("rahasia/b.txt", b"2"); server.put("biasa.txt", b"3")
+    pc = PC(tmp_path, server, "both")
+    pc.sync()
+    (pc.folder / "rahasia").chmod(0)
+    try:
+        result = pc.sync()
+    finally:
+        (pc.folder / "rahasia").chmod(0o755)
+    assert sorted(server.files) == ["biasa.txt", "rahasia/a.txt", "rahasia/b.txt"] and result.deleted_server == 0
+    assert result.errors and "tidak bisa membaca" in result.errors[0]
 
 
 def test_invalid_mode_and_uncreatable_folder(tmp_path, server):

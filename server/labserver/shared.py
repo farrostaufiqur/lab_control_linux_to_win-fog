@@ -7,6 +7,7 @@ memakai `expect` (SHA-256 yang diharapkan agent) supaya dua agent tidak saling m
 import os
 import re
 import secrets
+import shutil
 import threading
 from pathlib import Path
 
@@ -15,9 +16,7 @@ from .release import sha_of_stream
 MODES = ("off", "receive", "send", "both")
 MODE_LABELS = {"off": "Mati", "receive": "Terima saja", "send": "Kirim saja", "both": "Dua arah"}
 SYNC_SECONDS = 10
-MAX_FILE_BYTES = 100 * 1024 * 1024
-MAX_TOTAL_BYTES = 2 * 1024 ** 3
-MAX_FILES = 2000
+MIN_FREE_BYTES = 2 * 1024 ** 3       # bukan batas file: unggahan ditolak hanya bila ruang disk server tinggal sedikit
 MAX_DEPTH = 8
 MAX_PATH_CHARS = 200
 MAX_PART_CHARS = 120
@@ -73,6 +72,10 @@ class SharedFiles:
     def index(self) -> dict:
         return self.store.shared_index()
 
+    def disk_free(self) -> int:
+        self.root.mkdir(parents=True, exist_ok=True)
+        return shutil.disk_usage(self.root).free
+
     def total_size(self) -> int:
         return sum(entry["size"] for entry in self.index().values())
 
@@ -90,14 +93,13 @@ class SharedFiles:
         return None
 
     def put(self, path: str, stream, mtime: float, expect, now: float):
-        """Mengembalikan (status, entry). status: ok | too_big | conflict | name_clash | total_full | too_many."""
+        """Mengembalikan (status, entry). status: ok | conflict | name_clash | disk_full. Tanpa batas ukuran/jumlah file."""
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.tmp_dir / f"up-{secrets.token_hex(6)}"
         try:
-            try:
-                sha, size = sha_of_stream(stream, tmp, MAX_FILE_BYTES)
-            except ValueError:
-                return "too_big", None
+            sha, size = sha_of_stream(stream, tmp, None)
+            if self.disk_free() - size < MIN_FREE_BYTES:
+                return "disk_full", None
             with self._lock:
                 index = self.store.shared_index()
                 current = index.get(path)
@@ -105,11 +107,6 @@ class SharedFiles:
                     return "conflict", None
                 if self._clash(index, path):
                     return "name_clash", None
-                if not current and len(index) >= MAX_FILES:
-                    return "too_many", None
-                total = sum(e["size"] for e in index.values()) - (current["size"] if current else 0) + size
-                if total > MAX_TOTAL_BYTES:
-                    return "total_full", None
                 target = self.files_dir / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(tmp, target)

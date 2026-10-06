@@ -66,7 +66,7 @@ function statusCell(pc) {
 }
 
 function render() {
-  const { settings, modes, pcs, files, limits } = state;
+  const { settings, modes, pcs, files } = state;
   $("#sync-seconds").textContent = state.sync_seconds;
   if (document.activeElement !== $("#sh-path")) $("#sh-path").value = settings.path;
   const options = MODE_ORDER.map((m) => `<option value="${m}">${modes[m]}</option>`).join("");
@@ -81,7 +81,7 @@ function render() {
         ${MODE_ORDER.map((m) => `<option value="${m}" ${pc.mode === m ? "selected" : ""}>${esc(modes[m])}</option>`).join("")}</select></td>
       <td>${statusCell(pc)}</td></tr>`).join("") || `<tr><td colspan="3" class="text-muted">Belum ada komputer.</td></tr>`;
   }
-  $("#sh-usage").textContent = `${files.length} file · ${size(state.total_size)} dari ${size(limits.total)} (maks ${size(limits.file)} per file)`;
+  $("#sh-usage").textContent = `${files.length} file · ${size(state.total_size)} · sisa ruang disk server ${size(state.disk_free)}`;
   renderList();
 }
 

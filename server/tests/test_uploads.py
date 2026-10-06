@@ -89,7 +89,6 @@ def test_non_exe_release_rejected_at_finish(client):
 @pytest.mark.parametrize("body,status", [
     ({"kind": "shared", "path": "../x", "size": 10}, 400), ({"kind": "shared", "path": "a", "size": 0}, 400),
     ({"kind": "shared", "path": "a", "size": "10"}, 400), ({"kind": "shared", "path": "a"}, 400),
-    ({"kind": "shared", "path": "a", "size": shared.MAX_FILE_BYTES + 1}, 413),
     ({"kind": "release", "size": 10, "version": "bad version"}, 400), ({"kind": "lain", "size": 10}, 400),
 ])
 def test_create_validation(client, body, status):
@@ -137,3 +136,9 @@ def test_orphan_parts_are_pruned(tmp_path):
     (tmp_path / "u" / ("ab" * 8 + ".part")).write_bytes(b"sisa")
     store.prune(time.time())
     assert list((tmp_path / "u").iterdir()) == []
+
+
+def test_shared_upload_has_no_size_ceiling_but_release_does(client):
+    assert create(client, kind="shared", path="raksasa.bin", size=50 * 1024 ** 3).status_code in (200, 413)   # 413 hanya bila disk kurang
+    from labserver import release
+    assert create(client, kind="release", size=release.MAX_RELEASE_BYTES + 1).status_code == 413

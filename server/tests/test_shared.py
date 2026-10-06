@@ -152,20 +152,26 @@ def test_bad_paths_rejected_on_agent_endpoints(client):
     assert index(client).get_json()["files"] == {}
 
 
-def test_limits(client, monkeypatch):
+def test_no_limits_on_file_size_or_count(client):
     setup(client)
-    monkeypatch.setattr(shared, "MAX_FILE_BYTES", 10)
-    assert put(client, "besar.bin", data=b"x" * 11).status_code == 413
-    monkeypatch.setattr(shared, "MAX_FILE_BYTES", 1000)
-    monkeypatch.setattr(shared, "MAX_TOTAL_BYTES", 30)
-    assert put(client, "a", data=b"x" * 20).status_code == 200
-    assert put(client, "b", data=b"x" * 20).status_code == 413
-    assert put(client, "a", data=b"x" * 30).status_code == 200                  # menimpa: hanya selisih yang dihitung
-    monkeypatch.setattr(shared, "MAX_TOTAL_BYTES", 10 ** 6)
-    monkeypatch.setattr(shared, "MAX_FILES", 1)
-    assert put(client, "c", data=b"x").status_code == 413
-    assert client.delete("/api/agent/shared/file", query_string={"host": "PC-01", "path": "a"}, headers=AGENT).status_code == 200
-    assert put(client, "c", data=b"x").status_code == 200
+    big = b"x" * (3 * 1024 * 1024)
+    assert put(client, "besar.bin", data=big).status_code == 200
+    for i in range(30):
+        assert put(client, f"banyak/f{i}.txt", data=b"x").status_code == 200
+    data = client.get("/api/shared", headers=ADMIN).get_json()
+    assert len(data["files"]) == 31 and data["total_size"] == len(big) + 30 and data["disk_free"] > 0
+    assert not hasattr(shared, "MAX_FILE_BYTES") and not hasattr(shared, "MAX_FILES")
+
+
+def test_upload_refused_only_when_server_disk_is_nearly_full(client, monkeypatch):
+    setup(client)
+    monkeypatch.setattr(shared, "MIN_FREE_BYTES", 10 ** 15)                    # seolah-olah disk hampir penuh
+    assert put(client, "a.txt").status_code == 413
+    assert client.post("/api/shared/file", query_string={"path": "b.txt"}, data=b"x", headers=ADMIN).status_code == 413
+    assert client.post("/api/uploads", json={"kind": "shared", "path": "c.txt", "size": 5}, headers=ADMIN).status_code == 413
+    assert client.get("/api/shared", headers=ADMIN).get_json()["files"] == []
+    monkeypatch.setattr(shared, "MIN_FREE_BYTES", 0)
+    assert put(client, "a.txt").status_code == 200
 
 
 def test_names_clashing_by_case_or_folder_are_refused(client):
@@ -229,4 +235,4 @@ def test_path_rules_match_agent():
     for text in samples:
         assert sharedsync.clean_path(text) == shared.clean_path(text), text
         assert sharedsync.clean_profile_path(text) == shared.clean_profile_path(text), text
-    assert (sharedsync.MAX_FILE_BYTES, sharedsync.MAX_FILES, sharedsync.MAX_DEPTH) == (shared.MAX_FILE_BYTES, shared.MAX_FILES, shared.MAX_DEPTH)
+    assert sharedsync.MAX_DEPTH == shared.MAX_DEPTH

@@ -25,8 +25,6 @@ from pathlib import Path
 from .nethttp import agent_headers
 
 MODES = ("receive", "send", "both")
-MAX_FILE_BYTES = 100 * 1024 * 1024
-MAX_FILES = 2000
 MAX_DEPTH = 8
 MAX_PATH_CHARS = 200
 MAX_PART_CHARS = 120
@@ -271,11 +269,8 @@ class FolderSync:
                     if not entry.is_file(follow_symlinks=False):
                         continue
                     path = clean_path(rel)
-                    if path is None or st.st_size > MAX_FILE_BYTES:
+                    if path is None:
                         continue
-                    if len(local) + len(settling) >= MAX_FILES:
-                        errors.append(f"lebih dari {MAX_FILES} file; sinkron dihentikan")
-                        return {}, set(), cache, errors
                     if now - st.st_mtime < SETTLE_SECONDS:
                         settling.add(path)
                         if path in cache:
@@ -304,8 +299,6 @@ class FolderSync:
             with open(tmp, "wb") as out:
                 for chunk in client.download(path):
                     size += len(chunk)
-                    if size > MAX_FILE_BYTES:
-                        raise OSError("file terlalu besar")
                     digest.update(chunk)
                     out.write(chunk)
             if digest.hexdigest() != entry["sha256"]:
@@ -344,10 +337,7 @@ class FolderSync:
 
         local, settling, cache, scan_errors = self._scan(folder, cache, self._clock())
         result.errors.extend(scan_errors)
-        if scan_errors and not local and not settling and any("lebih dari" in e for e in scan_errors):
-            self._save(folder, base, {})
-            return result
-        server = {p: e for p, e in client.index().items() if clean_path(p) == p and e.get("size", 0) <= MAX_FILE_BYTES}
+        server = {p: e for p, e in client.index().items() if clean_path(p) == p}
 
         plan = []
         for path in sorted((set(local) | set(server) | set(base)) - settling):
@@ -356,6 +346,8 @@ class FolderSync:
             action = decide(mode, L, S, base.get(path),
                             local[path]["mtime"] if L else 0.0, server[path]["mtime"] if S else 0.0)
             plan.append((path, action, L, S))
+        if scan_errors:                       # ada folder yang tak terbaca: file di dalamnya tampak "hilang", jangan dihapus di server
+            plan = [p for p in plan if p[1] != "delete_server"]
         deletes = [p for p in plan if p[1] == "delete_server"]
         if len(deletes) > max(DELETE_GUARD_MIN, DELETE_GUARD_RATIO * len(base)):
             result.held_deletes = len(deletes)

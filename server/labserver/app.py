@@ -29,6 +29,7 @@ MAX_OVERRIDE_MINUTES = 60 * 24 * 7
 MAX_NOTICE_CHARS = 300
 MAX_NAME_CHARS = 40
 SESSION_HOURS = 12
+NO_LIMIT = 1 << 62      # Flask menganggap None = "pakai MAX_CONTENT_LENGTH", jadi batas tak terhingga dinyatakan angka besar
 MAX_SHOT_BYTES = 512 * 1024
 DEFAULT_SHOT_INTERVAL = 10
 MAX_SHOT_INTERVAL = 3600
@@ -343,9 +344,7 @@ def create_app(cfg: Config) -> Flask:
         return path
 
     def shared_error(status):
-        codes = {"too_big": (413, f"file lebih dari {shared.MAX_FILE_BYTES // 1048576} MB"),
-                 "total_full": (413, f"folder bersama penuh ({shared.MAX_TOTAL_BYTES // 1024 ** 3} GB)"),
-                 "too_many": (413, f"maksimal {shared.MAX_FILES} file"),
+        codes = {"disk_full": (413, "ruang disk server hampir habis"),
                  "conflict": (409, "file berubah di server; coba lagi"),
                  "name_clash": (409, "nama bentrok dengan file/folder lain (huruf besar-kecil dianggap sama)")}
         code, text = codes[status]
@@ -375,7 +374,7 @@ def create_app(cfg: Config) -> Flask:
     def agent_shared_put():
         shared_agent("write")
         path = shared_path_arg()
-        request.max_content_length = shared.MAX_FILE_BYTES
+        request.max_content_length = NO_LIMIT        # folder bersama tanpa batas ukuran
         status, entry = shared_files.put(path, request.stream, mtime_arg(), request.args.get("expect"), time.time())
         if status != "ok":
             shared_error(status)
@@ -502,14 +501,16 @@ def create_app(cfg: Config) -> Flask:
         if type(size) is not int or size <= 0:
             abort(400, "size wajib diisi (byte)")
         if kind == "shared":
-            target, limit = shared.clean_path(body.get("path")), shared.MAX_FILE_BYTES
+            target, limit = shared.clean_path(body.get("path")), None
             if target is None:
                 abort(400, "path file tidak valid")
+            if shared_files.disk_free() - size < shared.MIN_FREE_BYTES:
+                abort(413, "ruang disk server tidak cukup untuk berkas ini")
         elif kind == "release":
             target, limit = clean_version(body.get("version")), release.MAX_RELEASE_BYTES
         else:
             abort(400, "kind tidak dikenal")
-        if size > limit:
+        if limit is not None and size > limit:
             abort(413, f"berkas lebih dari {limit // 1048576} MB")
         uid = upload_sessions.create({"kind": kind, "target": target, "size": size}, time.time())
         if uid is None:
@@ -681,7 +682,7 @@ def create_app(cfg: Config) -> Flask:
         return jsonify({"settings": shared_settings(), "modes": shared.MODE_LABELS,
                         "files": [{"path": p, **e} for p, e in files.items()],
                         "total_size": sum(e["size"] for e in files.values()),
-                        "limits": {"file": shared.MAX_FILE_BYTES, "total": shared.MAX_TOTAL_BYTES, "files": shared.MAX_FILES},
+                        "disk_free": shared_files.disk_free(),
                         "pcs": pcs, "sync_seconds": shared.SYNC_SECONDS})
 
     @app.put("/api/shared/settings")
@@ -721,7 +722,7 @@ def create_app(cfg: Config) -> Flask:
     def api_shared_upload():
         admin_only()
         path = shared_path_arg()
-        request.max_content_length = shared.MAX_FILE_BYTES
+        request.max_content_length = NO_LIMIT
         status, entry = shared_files.put(path, request.stream, time.time(), None, time.time())
         if status != "ok":
             shared_error(status)

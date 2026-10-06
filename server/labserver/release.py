@@ -34,13 +34,13 @@ def prune_files(directory: Path, keep_sha: str | None) -> None:
         stale.unlink(missing_ok=True)
 
 
-def sha_of_stream(stream, tmp_path: Path, limit: int) -> tuple[str, int]:
-    """Salin aliran ke tmp_path sambil menghitung SHA-256; melempar ValueError bila melebihi limit."""
+def sha_of_stream(stream, tmp_path: Path, limit: int | None) -> tuple[str, int]:
+    """Salin aliran ke tmp_path sambil menghitung SHA-256; melempar ValueError bila melebihi limit (None = tanpa batas)."""
     digest, size = hashlib.sha256(), 0
     with open(tmp_path, "wb") as out:
         for chunk in iter(lambda: stream.read(1 << 20), b""):
             size += len(chunk)
-            if size > limit:
+            if limit is not None and size > limit:
                 raise ValueError("berkas terlalu besar")
             digest.update(chunk)
             out.write(chunk)
