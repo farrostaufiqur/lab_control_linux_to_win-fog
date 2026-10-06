@@ -28,6 +28,8 @@ Untuk saat server tidak bisa dipakai dan PC lab tidak bisa dibuka. `labagent.exe
 - Rilis = exe yang diunggah admin di dashboard (`POST /api/release`, hanya exe + versi opsional); **tanpa tanda tangan, kunci, atau JSON** (dihapus 2026-10-06 atas permintaan pemilik). Agent hanya memeriksa ukuran, SHA-256, dan awalan `MZ`. Konsekuensinya: akses admin atau `agent_token` di jalur HTTP LAN cukup untuk menyebarkan kode SYSTEM ke semua PC.
 - Keputusan pembaruan = SHA-256 exe terpasang vs rilis, bukan nomor versi. Pergantian gagal (tidak ada `helper.ok` baru dalam 30 dtk) otomatis dipulihkan.
 - Ganti nama Windows: server menyimpan tabel `renames` (pending -> applied|failed), menawarkannya lewat jawaban `/api/agent/release` (`"rename"`), helper memanggil `winapi.rename_computer` dan melapor ke `/api/agent/rename-result`. Saat PC muncul dengan nama baru, `Store.migrate_renamed` memindahkan alias, override, event, dan notice dari entri lama.
+- Catatan helper (unduh/pasang rilis gagal, ganti nama) ditulis ke `helper.json` (`notes`) dan dilaporkan agent sebagai peristiwa "Pembantu: ..." di log PC (`core._report_helper_notes`); galat yang sama diredam 10 menit.
+- Unggah rilis dari dashboard lewat jalur internet (`lab.fog.tf`) bisa gagal bila uplink server lambat (terukur 2026-10-06: 1 MB > 40 dtk); unggah lewat alamat LAN. Menu "Semua PC" di dashboard: waktu tertentu lewat prompt, `POST /api/all/command` (restart/shutdown, hanya PC online).
 - Agent tanpa helper (mis. belum dipasang ulang) mencoba menulis registry langsung; pada PC dengan kunci Policies milik SYSTEM itu gagal.
 
 ## Screenshot dan agent lewat tunnel
@@ -39,6 +41,7 @@ Untuk saat server tidak bisa dipakai dan PC lab tidak bisa dibuka. `labagent.exe
 ## Folder bersama
 - Server: `labserver/shared.py` (validasi nama, `SharedFiles` = file di `<folder db>/shared/files/` + tabel `shared_files`), endpoint agent `/api/agent/shared/{index,file}` (token, **selalu 404 bila lewat Cloudflare**, izin per aturan PC: index = receive/send/both, unduh = receive/both, unggah/hapus = send/both), admin `/api/shared*` dan halaman `/pembagian`. Aturan per PC di kolom `pcs.shared_mode` (NULL = bawaan di settings `shared`); poll membawa `shared: {mode, path, interval}`; status sinkron agent ada di memori (`shared_status`).
 - Agent: `labagent/sharedsync.py` (`decide` = tabel keputusan dari SHA lokal/server/base, `FolderSync`, `HttpSharedClient`, `is_local_url`), dipanggil `core.Agent.shared_once` di utas `run_shared`. `base` (SHA terakhir tersinkron) disimpan di `state_dir\shared.json`; hapus = file ada di base tetapi hilang di satu sisi. Aturan nama di agent dan server harus sama (dicek `test_path_rules_match_agent`).
+- Folder bersama dihapus utuh di satu PC = tidak punya folder: `FolderSync.run` mengosongkan `base`, folder dibuat ulang dan file diunduh lagi, tanpa hapus apa pun (diuji untuk receive/both/send). Hapus subfolder/file tetap hapus biasa.
 - Hapus di mode kirim/dua arah menghapus di server; mode terima tidak. Tidak ada tempat sampah (sengaja, sesuai permintaan pemilik).
 - Belum dicoba di Windows: `WindowsPlatform.profile_dir` (`USERPROFILE`), penggantian file yang sedang dibuka aplikasi lain, dan junction. Uji di dua PC: aturan berbeda, ubah/hapus file, matikan jaringan lalu nyalakan.
 

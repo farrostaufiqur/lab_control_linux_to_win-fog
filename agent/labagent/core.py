@@ -72,6 +72,7 @@ class Agent:
         self._shared_cfg = {"mode": "off", "path": "", "interval": 10.0}   # dari jawaban server
         self._shared_status: dict | None = None                            # dilaporkan ke server lewat poll
         self._shared_error_logged = ""
+        self._helper_note_ts = 0.0
         self.host = platform.hostname()
         self.user = platform.username()
         self.exempt = self.user.lower() in cfg.exempt_users
@@ -225,6 +226,7 @@ class Agent:
             if self._shot_interval <= 0:
                 self._last_shot = None          # dimatikan lalu dinyalakan lagi: server sudah membuang gambarnya
         self._save_state()
+        self._report_helper_notes()
         for action in reply.get("commands", []):
             self.power(action)
         return True
@@ -267,6 +269,14 @@ class Agent:
                 self.screenshot_once()
             except Exception:
                 pass
+
+    def _report_helper_notes(self):
+        """Catatan pembantu SYSTEM (unduh/pasang rilis, ganti nama) masuk ke log PC supaya kegagalannya terlihat di dashboard."""
+        from . import helper
+        for ts, text in helper.read_helper_notes(self.cfg.state_dir):
+            if ts > self._helper_note_ts:
+                self._helper_note_ts = ts
+                self.add_event("info", f"Pembantu: {text}")
 
     # folder bersama ------------------------------------------------------
     def shared_once(self) -> bool:

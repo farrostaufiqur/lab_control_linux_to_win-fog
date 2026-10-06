@@ -237,3 +237,46 @@ def test_rename_and_update_in_same_reply(tmp_path):
     w.rename = {"name": "LAB-03"}
     h = w.helper(); h.tick()
     assert w.renamed == ["LAB-03"] and h.finished
+
+
+# --- catatan pembantu untuk dashboard ------------------------------------------------------
+def test_failures_are_written_to_heartbeat_notes(tmp_path):
+    w = World(tmp_path, manifest=release(), exe=b"MZ" + b"z" * 200)               # unduhan rusak (isi beda)
+    h = w.helper(); h.tick()
+    notes = helper.read_helper_notes(w.state)
+    assert notes == []                                    # unduhan rusak ditolak oleh pemeriksaan SHA, bukan galat unduh
+    w.exe = None                                          # unduhan melempar galat
+    w.clock.now += helper.UPDATE_RETRY_SECONDS + 1
+    h.tick()
+    notes = helper.read_helper_notes(w.state)
+    assert notes and "unduhan gagal" in notes[-1][1] and notes[-1][0] == w.clock.now
+
+
+def test_notes_dedupe_repeated_errors_but_keep_new_ones(tmp_path):
+    w = World(tmp_path)
+    w.fail_manifest = True
+    h = w.helper()
+    for _ in range(4):
+        h.tick()
+        w.clock.now += helper.UPDATE_CHECK_SECONDS + 1
+    assert len(helper.read_helper_notes(w.state)) == 1                           # galat sama dalam 10 menit: satu catatan
+    w.clock.now += helper.NOTE_REPEAT_SECONDS
+    h.tick()
+    assert len(helper.read_helper_notes(w.state)) == 2                           # sudah lama: dicatat lagi
+    w.fail_manifest, w.manifest = False, release()
+    w.clock.now += helper.UPDATE_CHECK_SECONDS + 1
+    h.tick()
+    assert "memasang rilis" in helper.read_helper_notes(w.state)[-1][1]
+
+
+def test_notes_are_capped_and_bad_heartbeat_is_ignored(tmp_path):
+    w = World(tmp_path)
+    h = w.helper()
+    for i in range(25):
+        h._note(f"catatan {i}")
+    h._heartbeat(w.clock.now)
+    notes = helper.read_helper_notes(w.state)
+    assert len(notes) == helper.NOTES_KEPT and notes[-1][1] == "catatan 24"
+    (w.state / "helper.json").write_text("bukan json")
+    assert helper.read_helper_notes(w.state) == []
+    assert helper.read_helper_notes(tmp_path / "tidak-ada") == []

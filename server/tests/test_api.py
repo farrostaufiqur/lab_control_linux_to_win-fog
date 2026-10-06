@@ -540,3 +540,29 @@ def test_session_cookie_secure_only_over_https(client):
 
 def test_basic_auth_still_works_for_scripts(client):
     assert client.get("/api/pcs", headers=ADMIN).status_code == 200
+
+
+# --- restart/matikan semua komputer -------------------------------------------------------
+def test_all_command_only_reaches_online_pcs(client, monkeypatch):
+    poll(client, host="PC-01")
+    poll(client, host="PC-02")
+    import labserver.app as app_module
+    real = time.time
+    monkeypatch.setattr(app_module.time, "time", lambda: real() + 3600)     # semua PC tampak offline
+    poll_after = lambda host: client.post("/api/agent/poll", json={"host": host, "user": "u"}, headers=AGENT)
+    poll_after("PC-02")                                                     # hanya PC-02 yang online
+    reply = client.post("/api/all/command", json={"action": "restart"}, headers=ADMIN).get_json()
+    assert reply == {"ok": True, "count": 1}
+    assert poll_after("PC-02").get_json()["commands"] == ["restart"]
+    assert poll_after("PC-01").get_json()["commands"] == []
+
+
+def test_all_command_validation_and_auth(client):
+    poll(client)
+    assert client.post("/api/all/command", json={"action": "format"}, headers=ADMIN).status_code == 400
+    assert client.post("/api/all/command", json={}, headers=ADMIN).status_code == 400
+    assert client.post("/api/all/command", json={"action": "shutdown"}).status_code == 401
+    assert client.post("/api/all/command", json={"action": "shutdown"}, headers=ADMIN).get_json()["count"] == 1
+    assert poll(client).get_json()["commands"] == ["shutdown"]
+    details = [e["detail"] for e in client.get("/api/events", headers=ADMIN).get_json()]
+    assert any("shutdown ke semua komputer online (1" in d for d in details)

@@ -395,3 +395,48 @@ def test_is_local_url():
     assert not local("https://campur.example", Resolver("192.168.1.2", "8.8.4.4"))
     assert not local("https://tidak-ada.example", lambda *a: (_ for _ in ()).throw(OSError("dns")))
     assert not local("bukan url")
+
+
+@pytest.mark.parametrize("mode", ["receive", "both"])
+def test_deleting_the_whole_shared_folder_only_recreates_and_redownloads(tmp_path, server, mode):
+    """Folder bersama dihapus di satu komputer: dianggap belum punya folder; dibuat ulang dan file diunduh lagi.
+    Server dan komputer lain tidak kehilangan apa pun."""
+    import shutil
+    for i in range(4):
+        server.put(f"materi/bab{i}.txt", b"isi %d" % i)
+    server.put("tugas/a.txt", b"tugas")
+    pc, other = PC(tmp_path, server, mode), PC(tmp_path, server, "both", "lain")
+    pc.sync(); other.sync()
+    shutil.rmtree(pc.folder)
+    result = pc.sync()
+    assert (result.deleted_server, result.deleted_local, result.held_deletes) == (0, 0, 0) and result.errors == []
+    assert pc.files() == sorted(server.files) and len(server.files) == 5      # dibuat ulang dan diunduh lagi
+    other.sync()
+    assert other.files() == sorted(server.files)                             # komputer lain tidak terpengaruh
+    assert [c for c in server.calls if c[0] == "delete"] == []
+
+
+def test_deleting_the_shared_folder_in_send_mode_deletes_nothing(tmp_path, server):
+    import shutil
+    pc = PC(tmp_path, server, "send")
+    for i in range(6):
+        pc.write(f"f{i}.txt", b"x%d" % i)
+    pc.sync()
+    assert len(server.files) == 6
+    shutil.rmtree(pc.folder)
+    result = pc.sync()
+    assert pc.folder.is_dir() and len(server.files) == 6 and result.deleted_server == 0     # kirim saja: tidak mengunduh, tidak menghapus
+    pc.write("baru.txt", b"lagi")
+    pc.sync()
+    assert "baru.txt" in server.files and len(server.files) == 7
+
+
+def test_deleting_one_subfolder_is_still_a_normal_delete(tmp_path, server):
+    """Hanya folder bersama itu sendiri yang diperlakukan khusus; menghapus subfolder tetap menghapus filenya."""
+    import shutil
+    server.put("a/1.txt", b"1"); server.put("a/2.txt", b"2"); server.put("b/3.txt", b"3")
+    pc = PC(tmp_path, server, "both")
+    pc.sync()
+    shutil.rmtree(pc.folder / "a")
+    pc.sync()
+    assert sorted(server.files) == ["b/3.txt"]

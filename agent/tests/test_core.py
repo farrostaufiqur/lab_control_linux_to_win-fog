@@ -476,3 +476,18 @@ def test_poll_reply_clamps_shared_interval_and_ignores_garbage(tmp_path):
     w.reply["shared"] = {"mode": "terserah", "path": "x"}
     w.poll()
     assert w.agent._shared_cfg["mode"] == "both"                 # balasan aneh diabaikan
+
+
+def test_helper_notes_reach_the_server_log_once(env):
+    import json
+    clock, server, platform, make = env
+    agent = make()
+    state = Path(agent.cfg.state_dir)
+    (state / "helper.json").write_text(json.dumps({"ts": 1, "notes": [[100.0, "unduhan gagal: timeout"], [200.0, "memasang rilis 1.2.1"]]}))
+    agent.poll_once()
+    agent.poll_once()
+    (state / "helper.json").write_text(json.dumps({"ts": 2, "notes": [[100.0, "unduhan gagal: timeout"], [200.0, "memasang rilis 1.2.1"], [300.0, "pembaruan abc gagal dan dibatalkan"]]}))
+    agent.poll_once()
+    agent.poll_once()                                   # peristiwa dikirim pada poll berikutnya
+    details = [e["detail"] for body in server.bodies for e in body["events"] if e["detail"].startswith("Pembantu")]
+    assert details == ["Pembantu: unduhan gagal: timeout", "Pembantu: memasang rilis 1.2.1", "Pembantu: pembaruan abc gagal dan dibatalkan"]

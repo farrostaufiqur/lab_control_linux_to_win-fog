@@ -758,6 +758,20 @@ def create_app(cfg: Config) -> Flask:
             (shots_dir / f"{pc_id}.jpg").unlink(missing_ok=True)
         return jsonify(ok=True)
 
+    @app.post("/api/all/command")
+    def api_all_command():
+        """Restart/matikan semua komputer yang sedang online. PC offline dilewati supaya tidak mati begitu menyala."""
+        admin_only()
+        action = (request.get_json(silent=True) or {}).get("action")
+        if action not in COMMANDS:
+            abort(400, "action tidak dikenal")
+        now = time.time()
+        targets = [row["id"] for row in store.list_pcs() if now - row["last_seen"] <= cfg.online_timeout]
+        for pc_id in targets:
+            store.queue_command(pc_id, action, now)
+        store.add_event("*", "info", f"Admin meminta {action} ke semua komputer online ({len(targets)} komputer)")
+        return jsonify(ok=True, count=len(targets))
+
     @app.post("/api/all/<action>")
     def api_all(action):
         admin_only()

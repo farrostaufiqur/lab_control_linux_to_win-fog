@@ -30,6 +30,8 @@ UPDATE_CHECK_SECONDS = 60.0
 UPDATE_RETRY_SECONDS = 600.0
 DOWNLOAD_JITTER_SECONDS = 120.0
 HEARTBEAT_FRESH_SECONDS = 15.0
+NOTES_KEPT = 10
+NOTE_REPEAT_SECONDS = 600.0
 HOSTNAME_RE = re.compile(r"^(?!\d+$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?$")  # sama dengan server
 
 
@@ -51,6 +53,15 @@ def read_policy_request(state_dir) -> tuple[str, bool, bool] | None:
     if not (isinstance(sid, str) and SID_RE.match(sid) and isinstance(locked, bool) and isinstance(taskmgr, bool)):
         return None
     return sid, locked, taskmgr
+
+
+def read_helper_notes(state_dir) -> list[tuple[float, str]]:
+    """Catatan helper ([waktu, teks]) dari heartbeat; kosong bila berkas tidak ada atau rusak."""
+    try:
+        notes = json.loads((Path(state_dir) / HEARTBEAT_FILE).read_text()).get("notes", [])
+        return [(float(ts), str(text)[:200]) for ts, text in notes][-NOTES_KEPT:]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return []
 
 
 def helper_alive(state_dir, now: float) -> bool:
@@ -88,7 +99,9 @@ class Helper:
         self.cfg, self.ports, self._clock, self._rand = cfg, ports, clock, rand
         self.install_dir = Path(install_dir)
         self.state_dir = Path(cfg.state_dir)
-        self.log: list[str] = []          # catatan singkat, dipakai tes dan heartbeat
+        self.log: list[str] = []          # catatan singkat, dipakai tes
+        self._notes_dirty = False
+        self._notes: list[list] = []      # [[waktu, teks]] terakhir; dibaca agent lewat helper.json dan dilaporkan ke server
         self.finished = False             # True setelah skrip pembaruan diluncurkan
         self._policy_key = None
         self._policy_at = 0.0
@@ -98,6 +111,14 @@ class Helper:
         self._renamed_to: str | None = None
         self._bad = self._load_bad()
         self._write_ok()
+
+    def _note(self, text: str) -> None:
+        self.log.append(text)
+        now = self._clock()
+        if self._notes and self._notes[-1][1] == text and now - self._notes[-1][0] < NOTE_REPEAT_SECONDS:
+            return                         # galat yang sama berulang: jangan membanjiri log server
+        self._notes = (self._notes + [[now, text]])[-NOTES_KEPT:]
+        self._notes_dirty = True
 
     # berkas di folder pemasangan (hanya admin yang bisa menulis) --------------
     def _load_bad(self) -> set[str]:
@@ -111,7 +132,7 @@ class Helper:
             sha = failed.read_text().strip().lower()
             if updater.SHA_RE.match(sha):
                 bad.add(sha)
-                self.log.append(f"pembaruan {sha[:12]} gagal dan dibatalkan")
+                self._note(f"pembaruan {sha[:12]} gagal dan dibatalkan")
             failed.unlink()
             bad_file.write_text(json.dumps({"bad": sorted(bad)}))
         except OSError:
@@ -136,8 +157,11 @@ class Helper:
             try:
                 self._check_tick(now)
             except Exception as exc:
-                self.log.append(f"cek server gagal: {exc!r}")
+                self._note(f"cek server gagal: {exc!r}")
                 self._next_check = now + UPDATE_CHECK_SECONDS
+        if self._notes_dirty:                  # catatan baru langsung terlihat agent, tanpa menunggu tick berikutnya
+            self._notes_dirty = False
+            self._heartbeat(self._clock())
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set() and not self.finished:
@@ -149,7 +173,7 @@ class Helper:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             tmp = self.state_dir / (HEARTBEAT_FILE + ".tmp")
             tmp.write_text(json.dumps({"ts": now, "sha": self.ports.own_sha, "version": VERSION,
-                                       "errors": self._errors}))
+                                       "errors": self._errors, "notes": self._notes}))
             os.replace(tmp, self.state_dir / HEARTBEAT_FILE)
         except OSError:
             pass
@@ -182,13 +206,13 @@ class Helper:
         if not isinstance(name, str) or self.ports.rename_computer is None or self.ports.report_rename is None:
             return
         if not HOSTNAME_RE.match(name):
-            self.log.append("permintaan ganti nama tidak valid; diabaikan")
+            self._note("permintaan ganti nama tidak valid; diabaikan")
             return
         if name.lower() in (self.ports.hostname.lower(), (self._renamed_to or "").lower()):
             error = None       # sudah bernama itu (mis. laporan sebelumnya hilang): lapor ulang saja
         else:
             error = self.ports.rename_computer(name.upper())
-            self.log.append(f"nama komputer -> {name.upper()}" if error is None else f"ganti nama gagal: {error}")
+            self._note(f"nama komputer -> {name.upper()}" if error is None else f"ganti nama gagal: {error}")
         if error is None:
             self._renamed_to = name
         self.ports.report_rename(name.upper(), error is None, error or "")
@@ -199,7 +223,7 @@ class Helper:
             return
         manifest = updater.parse_manifest(raw)
         if manifest is None:
-            self.log.append("manifest rilis tidak valid")
+            self._note("manifest rilis tidak valid")
             return
         sha = manifest["sha256"]
         if sha == self.ports.own_sha or sha in self._bad:
@@ -219,7 +243,7 @@ class Helper:
                   and updater.file_sha256(new_path) == manifest["sha256"]
                   and updater.is_windows_exe(new_path))
         except Exception as exc:
-            self.log.append(f"unduhan gagal: {exc!r}")
+            self._note(f"unduhan gagal: {exc!r}")
             ok = False
         if not ok:
             new_path.unlink(missing_ok=True)
@@ -227,6 +251,6 @@ class Helper:
             return
         script = self.install_dir / "apply-update.cmd"
         script.write_text(updater.apply_script(str(self.install_dir), manifest["sha256"]), encoding="ascii")
-        self.log.append(f"memasang rilis {manifest['version']}")
+        self._note(f"memasang rilis {manifest['version']}")
         self.ports.launch_update(str(script))
         self.finished = True

@@ -16,7 +16,7 @@ Online/offline, user login, aplikasi dan judul jendela aktif, idle, uptime, pema
 
 ## Dashboard
 Halaman terpisah dengan sidebar (tampilan dari template admin yang sama dengan admin fog.tf; mode terang/gelap):
-- **Dashboard**: dua kelompok, Online dan Offline. Tiap PC satu kartu berisi nama, alamat IP, pratinjau screenshot (bila tidak terkunci), tombol pesan, dan tombol gembok (gembok tertutup = kunci, gembok terbuka = buka kunci; pilih durasinya). Klik kartu untuk membuka detail. Tombol **Semua PC** untuk mengunci/membuka/mengirim pesan ke semua.
+- **Dashboard**: dua kelompok, Online dan Offline. Tiap PC satu kartu berisi nama, alamat IP, pratinjau screenshot (bila tidak terkunci), tombol pesan, dan tombol gembok (gembok tertutup = kunci, gembok terbuka = buka kunci; pilih durasinya). Klik kartu untuk membuka detail. Menu **Semua PC**: kunci atau buka kunci semua (tanpa batas waktu, atau "Waktu tertentu…" yang menanyakan jumlah menit), semua ikut jadwal, pesan ke semua, serta **Restart semua** dan **Matikan semua** (dengan konfirmasi; hanya komputer yang sedang online, supaya PC offline tidak mati begitu menyala).
 - **Detail PC** (`/pc/<nama>`): screenshot besar, info lengkap, semua tombol (kunci, buka, ikut jadwal, pesan, nama tampilan, nama Windows, restart, matikan, hapus), dan log PC itu.
 - **Jadwal sesi**, **Log aktivitas**, **Pembaruan agent**, **Pengaturan** (interval screenshot, restart server).
 
@@ -118,6 +118,7 @@ Cukup unggah `labagent.exe` hasil build lewat dashboard, semua PC memperbarui ag
 Tiap rilis:
 1. Klik dua kali `agent\deploy\build.cmd` (hasil: `agent\deploy\labagent.exe`).
 2. Di dashboard buka **Pembaruan agent**, pilih `labagent.exe`, isi versi bila mau (kosong = `build-<8 huruf SHA>`), klik **Unggah rilis**.
+Unggah dari alamat **LAN** server (`http://192.168.x.x:8080/pembaruan`): berkas sekitar 18 MB itu lewat internet (`lab.fog.tf`) sangat lambat bila koneksi server sedang lemah, dan halaman memperingatkan bila dibuka lewat internet. Kemajuan unggah tampil dalam persen.
 3. Pantau tabel "Versi agent per PC": status berubah dari "menunggu pembaruan" menjadi "terbaru".
 
 Lewat skrip: `curl -u admin:... -H 'X-Lab-Admin: 1' -H 'Content-Type: application/octet-stream' --data-binary @labagent.exe "$LAB_URL/api/release?version=1.2.1"`.
@@ -144,6 +145,7 @@ Contoh: komputer A dua arah, B terima saja, C kirim saja. File dari C muncul di 
 - **Admin** mengunggah, mengunduh, dan menghapus file pusat dari halaman yang sama. Batas: 100 MB per file, 2 GB total, 2000 file, nama aman untuk Windows (tanpa `<>:"|?*\`, nama sistem seperti `con`, atau titik/spasi di akhir). `desktop.ini`, `Thumbs.db`, `~$*`, dan `*.labtmp` tidak disinkronkan.
 - **Pengaman:** file yang baru diubah (kurang dari 2 detik) ditunda sampai selesai ditulis; folder yang hilang dipulihkan, bukan dianggap "semua file dihapus"; penghapusan massal ke server (lebih dari 5 file dan separuh isi sekaligus) ditahan dan dilaporkan; unduhan diverifikasi SHA-256; tautan/junction tidak diikuti. Tidak ada tempat sampah: file yang dihapus di server hilang.
 - Status sinkron tiap komputer (OK / gagal) tampil di halaman itu, dan ringkasan perubahan masuk ke log PC.
+- Bila folder bersama itu sendiri dihapus di satu komputer, agent menganggap komputer itu belum punya folder: dibuat ulang dan file diunduh lagi (mode terima/dua arah). Tidak ada file yang dihapus di server atau komputer lain. Menghapus subfolder atau file di dalamnya tetap penghapusan biasa.
 
 ## Nama PC
 - Tombol **Nama**: nama tampilan di dashboard saja (tidak mengubah Windows).

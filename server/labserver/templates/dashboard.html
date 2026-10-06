@@ -82,8 +82,20 @@ async function refresh() {
     (data.global_override ? ` · semua PC di${data.global_override.mode === "lock" ? "kunci" : "buka"} manual` : "");
 }
 
-$("#all-menu").innerHTML = durationItems("lock", "*") + `<li><hr class="dropdown-divider"></li>` + durationItems("unlock", "*", true) +
-  `<li><a class="dropdown-item" href="#" data-msg="*">Pesan ke semua</a></li>`;
+const allItem = (attrs, label, cls = "") => `<li><a class="dropdown-item ${cls}" href="#" ${attrs}>${label}</a></li>`;
+$("#all-menu").innerHTML =
+  `<li><h6 class="dropdown-header">Kunci semua</h6></li>` +
+  allItem('data-mode="lock" data-pc="*" data-min=""', "Tanpa batas waktu") +
+  allItem('data-mode="lock" data-pc="*" data-ask="1"', "Waktu tertentu…") +
+  `<li><hr class="dropdown-divider"></li><li><h6 class="dropdown-header">Buka kunci semua</h6></li>` +
+  allItem('data-mode="unlock" data-pc="*" data-min=""', "Tanpa batas waktu") +
+  allItem('data-mode="unlock" data-pc="*" data-ask="1"', "Waktu tertentu…") +
+  `<li><hr class="dropdown-divider"></li>` +
+  allItem('data-clear="*"', "Semua ikut jadwal") +
+  allItem('data-msg="*"', "Pesan ke semua") +
+  `<li><hr class="dropdown-divider"></li>` +
+  allItem('data-cmd="restart" data-pc="*"', "Restart semua") +
+  allItem('data-cmd="shutdown" data-pc="*"', "Matikan semua", "text-danger");
 document.addEventListener("lab:changed", refresh);
 refresh();
 setInterval(refresh, 3000);

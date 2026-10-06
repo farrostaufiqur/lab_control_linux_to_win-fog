@@ -70,11 +70,23 @@ document.addEventListener("click", (e) => {
   e.preventDefault();
   const d = t.dataset;
   if (d.mode) {
-    const minutes = d.min === "" ? null : Number(d.min);
+    let minutes = d.min === "" ? null : Number(d.min);
+    if (d.ask) {                      // "Waktu tertentu": tanya jumlah menit
+      const answer = prompt(`${d.mode === "lock" ? "Kunci" : "Buka kunci"} semua komputer selama berapa menit? (1 - 10080)`, "30");
+      if (answer === null) return;
+      minutes = Number(answer.trim());
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) { alert("Isi menit dengan bilangan bulat 1 sampai 10080."); return; }
+    }
     return act(d.pc === "*" ? `/api/all/${d.mode}` : `${pcUrl(d.pc)}/${d.mode}`, "POST", { minutes });
   }
   if (d.clear) return act(d.clear === "*" ? "/api/all/clear" : `${pcUrl(d.clear)}/clear`, "POST");
   if (d.msg) return openMessage(d.msg, d.label);
+  if (d.cmd && d.pc === "*") {
+    const label = d.cmd === "shutdown" ? "mematikan" : "me-restart";
+    if (confirm(`Yakin ${label} SEMUA komputer yang sedang online? Pekerjaan yang belum disimpan di komputer-komputer itu akan hilang.`))
+      return act("/api/all/command", "POST", { action: d.cmd });
+    return;
+  }
   if (d.cmd) {
     const label = d.cmd === "shutdown" ? "mematikan" : "me-restart";
     if (confirm(`Yakin ${label} ${d.pc}? Pekerjaan yang belum disimpan di PC itu akan hilang.`))
