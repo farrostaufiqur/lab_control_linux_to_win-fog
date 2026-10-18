@@ -1,6 +1,9 @@
 <#
 Pasang Lab Control Server di komputer Windows (jalankan sebagai Administrator, dari folder ini).
 
+Memakai VENV BERSAMA di terminal-windows\.venv (dibuat lebih dulu oleh terminal-windows\windows\install.ps1
+-HanyaVenv); folder ini diharapkan sejajar dengan terminal-windows (mis. C:\Web\lab-server). Lain tempat: -Venv <folder>.
+
 Prasyarat: folder `server` sudah berisi config.toml dan labcontrol.db dari server lama
 (lihat README-pindah.md). Tanpa config.toml, run.py membuat token dan password BARU
 dan semua agent di PC lab tidak akan tersambung, jadi skrip ini berhenti kalau berkas itu tidak ada.
@@ -12,7 +15,8 @@ dan semua agent di PC lab tidak akan tersambung, jadi skrip ini berhenti kalau b
 param(
     [switch]$Baru,
     [int]$Port = 8080,
-    [string]$NamaTugas = "LabControlServer"
+    [string]$NamaTugas = "LabControlServer",
+    [string]$Venv = ""
 )
 $ErrorActionPreference = "Stop"
 $Dir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -26,36 +30,34 @@ if (-not $Baru) {
     }
 }
 
-# 1. Python
-$py = $null
-foreach ($c in @("py", "python")) {
-    if (Get-Command $c -ErrorAction SilentlyContinue) { $py = $c; break }
+# 1. Venv bersama: dibuat oleh terminal-windows\windows\install.ps1, tidak dibuat ulang di sini.
+$Venv = if ($Venv) { $Venv } elseif ($env:WEB_VENV) { $env:WEB_VENV } else { Join-Path (Split-Path $Dir -Parent) "terminal-windows\.venv" }
+$VenvPy = Join-Path $Venv "Scripts\python.exe"
+$VenvPyw = Join-Path $Venv "Scripts\pythonw.exe"
+if (-not (Test-Path $VenvPy)) {
+    throw "Venv bersama tidak ditemukan di $Venv. Jalankan dulu terminal-windows\windows\install.ps1 -HanyaVenv (atau beri -Venv <folder>)."
 }
-if (-not $py) {
-    throw "Python belum terpasang. Jalankan: winget install Python.Python.3.12  lalu buka PowerShell baru."
+$ea = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+& $VenvPy -c "import flask, waitress, tzdata" 2>$null
+$kode = $LASTEXITCODE
+$ErrorActionPreference = $ea
+if ($kode -ne 0) {
+    throw "Venv bersama belum berisi paket yang dibutuhkan. Jalankan ulang terminal-windows\windows\install.ps1 -HanyaVenv."
 }
-$pyArgs = if ($py -eq "py") { @("-3") } else { @() }
 
-# 2. venv + dependensi
-if (-not (Test-Path ".venv\Scripts\python.exe")) {
-    & $py @pyArgs -m venv .venv
-}
-& ".venv\Scripts\python.exe" -m pip install --upgrade pip | Out-Null
-& ".venv\Scripts\python.exe" -m pip install -r requirements.txt
-
-# 3. Firewall: hanya jaringan lokal (LAN dan alamat server tunnel di LAN)
+# 2. Firewall: hanya jaringan lokal (LAN dan alamat server tunnel di LAN)
 $aturan = "Lab Control Server $Port"
 if (-not (Get-NetFirewallRule -DisplayName $aturan -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName $aturan -Direction Inbound -Protocol TCP -LocalPort $Port `
         -RemoteAddress LocalSubnet -Action Allow -Profile Any | Out-Null
 }
 
-# 4. Komputer jangan tidur (server harus selalu nyala)
+# 3. Komputer jangan tidur (server harus selalu nyala)
 powercfg /change standby-timeout-ac 0
 powercfg /change hibernate-timeout-ac 0
 
-# 5. Tugas terjadwal: jalan saat boot, SYSTEM, dinyalakan ulang kalau mati
-$aksi = New-ScheduledTaskAction -Execute (Join-Path $Dir ".venv\Scripts\python.exe") `
+# 4. Tugas terjadwal: jalan saat boot, SYSTEM, dinyalakan ulang kalau mati
+$aksi = New-ScheduledTaskAction -Execute $VenvPy `
     -Argument "run.py" -WorkingDirectory $Dir
 $pemicu = New-ScheduledTaskTrigger -AtStartup
 $pengaturan = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
@@ -66,7 +68,7 @@ Register-ScheduledTask -TaskName $NamaTugas -Action $aksi -Trigger $pemicu -Sett
     -Principal $akun -Force | Out-Null
 Start-ScheduledTask -TaskName $NamaTugas
 
-# 6. Cek
+# 5. Cek
 Start-Sleep -Seconds 5
 try {
     $r = Invoke-RestMethod "http://127.0.0.1:$Port/healthz" -TimeoutSec 10

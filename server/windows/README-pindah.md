@@ -7,13 +7,14 @@ Tujuan: PC lab yang sudah tersambung tetap tersambung tanpa dipasang ulang. Agen
 ## Prasyarat di komputer tujuan
 1. IP **192.168.1.17** tetap (reservasi DHCP di router lebih aman daripada IP statis manual).
 2. Python 3.12 (`winget install Python.Python.3.12`), terpasang untuk semua pengguna.
+   Venv **bersama** semua web Windows dibuat di `C:\Web\terminal-windows\.venv` lewat `terminal-windows\windows\install.ps1 -HanyaVenv`; skrip di sini tidak membuat venv sendiri. Susunan folder: `C:\Web\terminal-windows`, `C:\Web\bell`, `C:\Web\lab-server`.
 3. Komputer tidak tidur dan nyala terus (skrip memasang `powercfg` untuk itu).
 
 ## Uji coba (tanpa mengganggu PC lab)
 Jalankan salinan di komputer tujuan dengan **port lain** supaya agent tidak berpindah ke server uji:
 1. Di Linux (server tetap jalan, ini hanya membaca):
    `sqlite3 /home/albayan/WEBSITE/lab-control/server/labcontrol.db ".backup /tmp/labcontrol-uji.db"`
-2. Salin folder `server` (tanpa `.venv`) ke `C:\LabControl\server`, taruh `config.toml` dan `labcontrol-uji.db` (ganti nama jadi `labcontrol.db`) di dalamnya.
+2. Salin folder `server` (tanpa `.venv`) ke `C:\Web\lab-server` (ganti namanya dari `server`), taruh `config.toml` dan `labcontrol-uji.db` (ganti nama jadi `labcontrol.db`) di dalamnya.
 3. Di `config.toml` ubah `port = 8081`, lalu jalankan `install-server.ps1 -Port 8081 -NamaTugas LabControlUji`.
 4. Buka `http://192.168.1.17:8081`, pastikan login dan daftar PC tampil. Setelah selesai: `Unregister-ScheduledTask LabControlUji -Confirm:$false` dan kembalikan `port = 8080`.
 
@@ -29,8 +30,8 @@ Urutannya penting: server lama baru dimatikan setelah paketnya diambil, dan auto
        --exclude=tests server
    ```
    Paket berisi `config.toml` (token dan password): jangan dikirim lewat saluran terbuka dan hapus setelah dipakai.
-3. **Di Windows**: salin ke `C:\LabControl`, lalu `tar xzf lab-server.tar.gz`. Pastikan `server\config.toml` dan `server\labcontrol.db` ada, lalu jalankan sebagai Administrator:
-   `powershell -ExecutionPolicy Bypass -File C:\LabControl\server\windows\install-server.ps1`
+3. **Di Windows**: salin ke `C:\Web`, lalu `tar xzf lab-server.tar.gz` dan `Rename-Item server lab-server`. Pastikan `server\config.toml` dan `server\labcontrol.db` ada, lalu jalankan sebagai Administrator:
+   `powershell -ExecutionPolicy Bypass -File C:\Web\lab-server\windows\install-server.ps1`
 4. **Cek**: dari PC lain buka `http://192.168.1.17:8080`. Login memakai password lama (cookie sesi lama juga masih berlaku). Dalam sekitar 20 detik PC lab harus kembali online dengan nama, alias, dan jadwal yang sama.
 5. **Arahkan tunnel** supaya `lab.fog.tf` menuju server baru: di `WEBSITE/fog/tunnel/config.yaml` ubah
    `service: http://127.0.0.1:8080` pada `hostname: lab.fog.tf` menjadi `service: http://192.168.1.17:8080`,
