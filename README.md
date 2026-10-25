@@ -155,6 +155,16 @@ Contoh: komputer A dua arah, B terima saja, C kirim saja. File dari C muncul di 
 - Setelah restart PC melapor dengan nama baru dan tampil sebagai entri baru; nama tampilan, override kunci, dan log entri lama dipindahkan otomatis. Bila gagal, dashboard menampilkan galatnya dan permintaan tidak diulang otomatis (kirim ulang dari tombol yang sama).
 - PC yang tergabung domain (AD) tidak dianjurkan: nama lokal berbeda dari nama di domain.
 
+## Perintah ke komputer (menu "Perintah")
+Admin bisa menjalankan perintah `cmd` atau PowerShell di satu PC atau semua PC yang online, lalu melihat kode keluar dan keluarannya di dashboard (`/perintah`, atau tombol "Perintah…" di halaman PC). Perlu agent **v1.3.0+**.
+
+- Dijalankan oleh pembantu agent (`labagent.exe --helper`) sebagai **SYSTEM**, tanpa jendela dan di luar sesi user, jadi tidak bisa menampilkan program ke layar. Pembantu mengambil perintahnya sendiri dari server tiap 5 detik; agent user dan berkas di folder user tidak terlibat, sehingga user biasa tidak bisa menyuruh SYSTEM menjalankan sesuatu.
+- Satu perintah per PC pada satu waktu, berurutan. Batas waktu 1 sampai 900 detik (bawaan 60); proses yang melewatinya dihentikan beserta anak prosesnya. Panjang perintah maks 4000 karakter; keluaran yang dikirim maks 16000 karakter terakhir.
+- PC offline lebih dari 10 menit tidak menjalankan perintah itu saat menyala (status "Kedaluwarsa"). Perintah yang belum diambil PC bisa dibatalkan. PC yang tidak melapor hasil ditandai "Tanpa hasil".
+- Tiap perintah tercatat di log PC (siapa, isi singkat, hasil) dan riwayat lengkapnya disimpan selama `event_retention_days`.
+- Pemasangan ke PC lama lewat pembaruan jaringan biasa (bangun `build.cmd`, unggah `labagent.exe` di menu Pembaruan agent).
+- API: `POST /api/pcs/<id>/exec` dan `POST /api/all/exec` dengan `{"shell":"cmd|powershell","script":"...","timeout":60}`; `GET /api/jobs?pc=&limit=`; `POST /api/jobs/<id>/cancel`.
+
 ## Pemulihan darurat (server rusak, PC terkunci)
 Bila server tidak bisa dihidupkan dan PC lab tetap terkunci, agent bisa dicopot dengan mencolok drive (flashdisk, HDD eksternal) yang berisi **file dengan nama rahasia** di folder paling atas (tingkat pertama).
 

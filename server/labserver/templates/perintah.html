@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Perintah{% endblock %}
+{% block content %}
+<div class="page-head"><h4>Perintah ke komputer</h4></div>
+<div class="widget-box card">
+    <p class="text-muted">Dijalankan oleh pembantu agent sebagai <b>SYSTEM</b> (hak penuh, tanpa jendela, tanpa user yang melihat),
+        sehingga tidak bisa menampilkan program ke layar. Hasil (kode keluar dan keluaran) muncul di tabel di bawah.
+        PC yang offline lebih dari 10 menit tidak menjalankan perintah itu. Perlu agent v1.3.0 atau lebih baru.</p>
+    <div class="row g-3">
+        <div class="col-md-5"><label class="form-label" for="x-target">Tujuan</label>
+            <select class="form-select" id="x-target"></select></div>
+        <div class="col-md-4"><label class="form-label" for="x-shell">Shell</label>
+            <select class="form-select" id="x-shell">
+                <option value="cmd">Command Prompt (cmd)</option>
+                <option value="powershell">PowerShell</option>
+            </select></div>
+        <div class="col-md-3"><label class="form-label" for="x-timeout">Batas waktu (detik)</label>
+            <input class="form-control" type="number" id="x-timeout" min="1" max="900" value="60"></div>
+        <div class="col-12"><label class="form-label" for="x-script">Perintah (boleh beberapa baris)</label>
+            <textarea class="form-control font-monospace" id="x-script" rows="5" maxlength="4000" spellcheck="false"
+                placeholder="mis. ipconfig /all"></textarea></div>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center mt-3">
+        <button class="btn btn-primary" id="x-run">Jalankan</button>
+        <span class="text-muted" id="x-msg"></span>
+    </div>
+</div>
+<div class="widget-box card">
+    <h5 class="mb-3">Riwayat</h5>
+    <div class="table-responsive"><table class="table table-hover mb-0">
+        <thead><tr><th>#</th><th>PC</th><th>Waktu</th><th>Perintah</th><th>Status</th><th></th></tr></thead>
+        <tbody id="jobs"></tbody>
+    </table></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const STATE = {
+  pending: ["badge-light-warning", "Menunggu PC"], running: ["badge-light-primary", "Berjalan"],
+  done: ["badge-light-success", "Selesai"], failed: ["badge-light-danger", "Gagal"],
+  timeout: ["badge-light-danger", "Waktu habis"], cancelled: ["badge-light-dark", "Dibatalkan"],
+  expired: ["badge-light-dark", "Kedaluwarsa (PC offline)"], lost: ["badge-light-danger", "Tanpa hasil"],
+};
+const initialPc = new URLSearchParams(location.search).get("pc") || "";
+let targetsBuilt = false;
+
+async function loadTargets() {
+  const data = await api("/api/pcs");
+  const select = $("#x-target");
+  if (targetsBuilt && select.options.length === data.pcs.length + 1) return;
+  const keep = select.value || initialPc;
+  select.innerHTML = `<option value="*">Semua komputer yang online</option>` +
+    data.pcs.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${p.online ? "" : " (offline)"}</option>`).join("");
+  select.value = [...select.options].some((o) => o.value === keep) ? keep : "*";
+  targetsBuilt = true;
+}
+
+function jobRow(j) {
+  const [cls, label] = STATE[j.state] || ["badge-light-dark", j.state];
+  const code = j.exit_code != null && j.state !== "pending" ? ` · kode ${j.exit_code}` : "";
+  const out = j.output ? `<details><summary class="small">Keluaran</summary><pre class="small mb-0" style="white-space:pre-wrap;max-height:260px;overflow:auto">${esc(j.output)}</pre></details>` : "";
+  const cancel = j.state === "pending" ? `<button class="btn btn-sm btn-outline-danger" data-cancel="${j.id}">Batalkan</button>` : "";
+  return `<tr><td>${j.id}</td><td>${esc(j.pc)}</td><td>${dateTime(j.created)}</td>` +
+    `<td><code>${esc(j.shell)}</code> <span class="font-monospace small" style="white-space:pre-wrap">${esc(j.script.length > 200 ? j.script.slice(0, 200) + "…" : j.script)}</span>${out}</td>` +
+    `<td><span class="badge ${cls}">${label}</span>${code}</td><td>${cancel}</td></tr>`;
+}
+async function refresh() {
+  try {
+    await loadTargets();
+    const rows = await api("/api/jobs?limit=60");
+    const open = new Set([...document.querySelectorAll("#jobs details[open]")].map((d) => d.closest("tr").firstElementChild.textContent));
+    $("#jobs").innerHTML = rows.map(jobRow).join("") || `<tr><td colspan="6" class="text-muted">Belum ada perintah.</td></tr>`;
+    document.querySelectorAll("#jobs tr").forEach((tr) => { if (open.has(tr.firstElementChild.textContent)) tr.querySelector("details")?.setAttribute("open", ""); });
+    setErr("");
+  } catch (e) { setErr("Server tidak terjangkau: " + e.message); }
+}
+
+$("#x-run").onclick = async () => {
+  const target = $("#x-target").value, script = $("#x-script").value;
+  if (!script.trim()) { $("#x-msg").textContent = "Isi perintah dulu."; return; }
+  const who = target === "*" ? "SEMUA komputer yang online" : target;
+  if (!confirm(`Jalankan perintah ini sebagai SYSTEM di ${who}?\n\n${script.length > 300 ? script.slice(0, 300) + "…" : script}`)) return;
+  const body = { shell: $("#x-shell").value, script, timeout: Number($("#x-timeout").value) || 60 };
+  const out = await act(target === "*" ? "/api/all/exec" : `${pcUrl(target)}/exec`, "POST", body);
+  if (out) { $("#x-msg").textContent = target === "*" ? `Dikirim ke ${out.count} komputer.` : `Perintah #${out.id} dikirim.`; refresh(); }
+};
+document.addEventListener("click", (ev) => {
+  const id = ev.target.dataset && ev.target.dataset.cancel;
+  if (id) act(`/api/jobs/${id}/cancel`, "POST").then(refresh);
+});
+refresh();
+setInterval(refresh, 3000);
+</script>
+{% endblock %}

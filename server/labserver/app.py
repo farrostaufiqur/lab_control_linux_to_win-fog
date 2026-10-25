@@ -24,6 +24,11 @@ from .db import Store
 HOST_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 EVENT_TYPES = {"agent_start", "app", "lock", "unlock", "user_action", "command", "info"}
 COMMANDS = {"shutdown", "restart"}
+SHELLS = {"cmd", "powershell"}
+MAX_SCRIPT_CHARS = 4000
+MAX_OUTPUT_CHARS = 16000
+JOB_TIMEOUT_DEFAULT, JOB_TIMEOUT_MAX = 60, 900
+JOB_PENDING_TTL = 600      # detik; PC yang offline selama ini tidak menjalankan perintah lama begitu menyala
 MAX_EVENTS_PER_POLL = 200
 MAX_OVERRIDE_MINUTES = 60 * 24 * 7
 MAX_NOTICE_CHARS = 300
@@ -411,6 +416,36 @@ def create_app(cfg: Config) -> Flask:
         rename = {"name": req["new"]} if req and req["state"] == "pending" else None
         return jsonify({"release": release.manifest(rel) if rel else None, "rename": rename})
 
+    @app.post("/api/agent/jobs/next")
+    def agent_job_next():
+        agent_only()
+        data = request.get_json(silent=True)
+        host = data.get("host", "") if isinstance(data, dict) else ""
+        if not (isinstance(host, str) and HOST_RE.match(host)) or store.get_pc(host) is None:
+            return jsonify(job=None)
+        job = store.take_job(host, JOB_PENDING_TTL, time.time())
+        if job is None:
+            return jsonify(job=None)
+        return jsonify(job={"id": job["id"], "shell": job["shell"], "script": job["script"], "timeout": job["timeout"]})
+
+    @app.post("/api/agent/jobs/result")
+    def agent_job_result():
+        agent_only()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            abort(400)
+        host, job_id = data.get("host", ""), _int(data.get("id"), 1, 1 << 62)
+        if not (isinstance(host, str) and HOST_RE.match(host)) or job_id is None:
+            abort(400)
+        exit_code = data.get("exit_code")
+        exit_code = exit_code if isinstance(exit_code, int) and not isinstance(exit_code, bool) else None
+        output = _text(data.get("output"), MAX_OUTPUT_CHARS) or ""
+        job = store.finish_job(job_id, host, exit_code, output, bool(data.get("timed_out")), time.time())
+        if job is not None:
+            detail = {"done": "selesai", "failed": f"selesai dengan kode {exit_code}", "timeout": "dihentikan (waktu habis)"}[job["state"]]
+            store.add_event(host, "command", f"Perintah #{job_id} {detail}")
+        return jsonify(ok=True)
+
     @app.post("/api/agent/rename-result")
     def agent_rename_result():
         agent_only()
@@ -624,6 +659,10 @@ def create_app(cfg: Config) -> Flask:
     def page_log():
         return page("log.html", "log")
 
+    @app.get("/perintah")
+    def page_commands():
+        return page("perintah.html", "perintah")
+
     @app.get("/pembaruan")
     def page_release():
         return page("pembaruan.html", "pembaruan")
@@ -830,6 +869,64 @@ def create_app(cfg: Config) -> Flask:
         if action not in COMMANDS:
             abort(400, "action tidak dikenal")
         store.queue_command(pc_id, action, time.time())
+        return jsonify(ok=True)
+
+    # perintah shell ke PC -------------------------------------------------
+    def job_view(row):
+        return {"id": row["id"], "pc": row["pc"], "shell": row["shell"], "script": row["script"], "timeout": row["timeout"],
+                "state": row["state"], "exit_code": row["exit_code"], "output": row["output"] or "",
+                "created": row["created"], "started": row["started"], "finished": row["finished"]}
+
+    def job_from_request():
+        body = request.get_json(silent=True) or {}
+        shell, script = body.get("shell", "cmd"), body.get("script")
+        if shell not in SHELLS:
+            abort(400, "shell harus cmd atau powershell")
+        if not isinstance(script, str) or not script.strip():
+            abort(400, "perintah kosong")
+        if len(script) > MAX_SCRIPT_CHARS:
+            abort(400, f"perintah terlalu panjang (maks {MAX_SCRIPT_CHARS} karakter)")
+        timeout = _int(body.get("timeout", JOB_TIMEOUT_DEFAULT), 1, JOB_TIMEOUT_MAX)
+        if timeout is None:
+            abort(400, "timeout tidak valid")
+        return shell, script, timeout
+
+    def queue_job(pc_id, shell, script, timeout, now):
+        job_id = store.add_job(pc_id, shell, script, timeout, now)
+        first = " ".join(script.split())[:120]
+        store.add_event(pc_id, "command", f"Admin menjalankan perintah #{job_id} ({shell}): {first}", now)
+        return job_id
+
+    @app.post("/api/pcs/<pc_id>/exec")
+    def api_pc_exec(pc_id):
+        admin_only()
+        pc_or_404(pc_id)
+        shell, script, timeout = job_from_request()
+        return jsonify(ok=True, id=queue_job(pc_id, shell, script, timeout, time.time()))
+
+    @app.post("/api/all/exec")
+    def api_all_exec():
+        """Perintah ke semua komputer yang sedang online (yang offline dilewati)."""
+        admin_only()
+        shell, script, timeout = job_from_request()
+        now = time.time()
+        targets = [row["id"] for row in store.list_pcs() if now - row["last_seen"] <= cfg.online_timeout]
+        ids = [queue_job(pc_id, shell, script, timeout, now) for pc_id in targets]
+        store.add_event("*", "info", f"Admin menjalankan perintah ke semua komputer online ({len(targets)} komputer)", now)
+        return jsonify(ok=True, count=len(ids), ids=ids)
+
+    @app.get("/api/jobs")
+    def api_jobs():
+        admin_only()
+        pc = request.args.get("pc") or None
+        limit = _int(request.args.get("limit", 50), 1, 200) or 50
+        return jsonify([job_view(row) for row in store.list_jobs(pc, limit)])
+
+    @app.post("/api/jobs/<int:job_id>/cancel")
+    def api_job_cancel(job_id):
+        admin_only()
+        if not store.cancel_job(job_id, time.time()):
+            abort(409, "hanya perintah yang belum diambil PC yang bisa dibatalkan")
         return jsonify(ok=True)
 
     @app.delete("/api/pcs/<pc_id>")

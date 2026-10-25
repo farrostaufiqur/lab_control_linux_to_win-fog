@@ -566,3 +566,117 @@ def test_all_command_validation_and_auth(client):
     assert poll(client).get_json()["commands"] == ["shutdown"]
     details = [e["detail"] for e in client.get("/api/events", headers=ADMIN).get_json()]
     assert any("shutdown ke semua komputer online (1" in d for d in details)
+
+
+# --- perintah shell ke PC ------------------------------------------------------------
+def next_job(client, host="PC-01"):
+    return client.post("/api/agent/jobs/next", json={"host": host}, headers=AGENT).get_json()["job"]
+
+
+def test_exec_flow_from_queue_to_result(client):
+    poll(client)
+    made = client.post("/api/pcs/PC-01/exec", json={"shell": "powershell", "script": "Get-Date", "timeout": 30}, headers=ADMIN)
+    assert made.status_code == 200
+    job_id = made.get_json()["id"]
+    job = next_job(client)
+    assert job == {"id": job_id, "shell": "powershell", "script": "Get-Date", "timeout": 30}
+    assert next_job(client) is None                       # sudah diserahkan: tidak diulang
+    done = client.post("/api/agent/jobs/result", headers=AGENT,
+                       json={"host": "PC-01", "id": job_id, "exit_code": 0, "output": "Senin", "timed_out": False})
+    assert done.status_code == 200
+    row = client.get("/api/jobs", headers=ADMIN).get_json()[0]
+    assert (row["state"], row["exit_code"], row["output"]) == ("done", 0, "Senin")
+    details = [e["detail"] for e in client.get("/api/events?pc=PC-01", headers=ADMIN).get_json()]
+    assert any("menjalankan perintah" in d for d in details) and any("selesai" in d for d in details)
+
+
+def test_exec_failure_and_timeout_states(client):
+    poll(client)
+    for exit_code, timed_out, state in ((3, False, "failed"), (None, True, "timeout")):
+        job_id = client.post("/api/pcs/PC-01/exec", json={"script": "x"}, headers=ADMIN).get_json()["id"]
+        assert next_job(client)["id"] == job_id
+        client.post("/api/agent/jobs/result", headers=AGENT,
+                    json={"host": "PC-01", "id": job_id, "exit_code": exit_code, "output": "", "timed_out": timed_out})
+        assert client.get("/api/jobs?pc=PC-01&limit=1", headers=ADMIN).get_json()[0]["state"] == state
+
+
+def test_exec_validation_and_auth(client):
+    poll(client)
+    assert client.post("/api/pcs/PC-01/exec", json={"script": "dir"}).status_code == 401
+    for bad in ({"script": ""}, {"script": "  "}, {"script": "x", "shell": "bash"}, {"script": "x" * 4001},
+                {"script": "x", "timeout": "abc"}):
+        assert client.post("/api/pcs/PC-01/exec", json=bad, headers=ADMIN).status_code == 400
+    assert client.post("/api/pcs/NOPE/exec", json={"script": "dir"}, headers=ADMIN).status_code == 404
+    capped = client.post("/api/pcs/PC-01/exec", json={"script": "dir", "timeout": 99999}, headers=ADMIN).get_json()["id"]
+    assert next_job(client)["timeout"] == 900 and capped
+    assert client.post("/api/agent/jobs/next", json={"host": "PC-01"}).status_code == 403
+    assert client.post("/api/agent/jobs/result", json={"host": "PC-01", "id": 1}).status_code == 403
+
+
+def test_exec_result_only_from_owner_and_only_once(client):
+    poll(client); poll(client, host="PC-02")
+    job_id = client.post("/api/pcs/PC-01/exec", json={"script": "dir"}, headers=ADMIN).get_json()["id"]
+    assert next_job(client, "PC-02") is None                # perintah PC-01 tidak bocor ke PC lain
+    next_job(client)
+    client.post("/api/agent/jobs/result", headers=AGENT, json={"host": "PC-02", "id": job_id, "exit_code": 0, "output": "palsu"})
+    assert client.get("/api/jobs", headers=ADMIN).get_json()[0]["state"] == "running"
+    ok = {"host": "PC-01", "id": job_id, "exit_code": 0, "output": "asli"}
+    client.post("/api/agent/jobs/result", headers=AGENT, json=ok)
+    client.post("/api/agent/jobs/result", headers=AGENT, json={**ok, "output": "timpa", "exit_code": 9})
+    row = client.get("/api/jobs", headers=ADMIN).get_json()[0]
+    assert (row["output"], row["exit_code"]) == ("asli", 0)
+
+
+def test_exec_runs_one_at_a_time_in_order(client):
+    poll(client)
+    first = client.post("/api/pcs/PC-01/exec", json={"script": "a"}, headers=ADMIN).get_json()["id"]
+    second = client.post("/api/pcs/PC-01/exec", json={"script": "b"}, headers=ADMIN).get_json()["id"]
+    assert next_job(client)["id"] == first
+    assert next_job(client) is None                         # menunggu yang pertama melapor
+    client.post("/api/agent/jobs/result", headers=AGENT, json={"host": "PC-01", "id": first, "exit_code": 0, "output": ""})
+    assert next_job(client)["id"] == second
+
+
+def test_exec_cancel_pending_only(client):
+    poll(client)
+    pending = client.post("/api/pcs/PC-01/exec", json={"script": "a"}, headers=ADMIN).get_json()["id"]
+    assert client.post(f"/api/jobs/{pending}/cancel", headers=ADMIN).status_code == 200
+    assert next_job(client) is None
+    assert client.post(f"/api/jobs/{pending}/cancel", headers=ADMIN).status_code == 409
+
+
+def test_exec_expires_when_pc_was_offline_too_long(client, monkeypatch):
+    from labserver import app as app_module
+    poll(client)
+    client.post("/api/pcs/PC-01/exec", json={"script": "a"}, headers=ADMIN)
+    real = time.time
+    monkeypatch.setattr(app_module.time, "time", lambda: real() + app_module.JOB_PENDING_TTL + 5)
+    assert next_job(client) is None
+    assert client.get("/api/jobs", headers=ADMIN).get_json()[0]["state"] == "expired"
+
+
+def test_exec_all_targets_online_pcs_only(client):
+    poll(client); poll(client, host="PC-02")
+    assert client.post("/api/all/exec", json={"script": "hostname"}, headers=ADMIN).get_json()["count"] == 2
+    assert next_job(client, "PC-01")["script"] == "hostname" and next_job(client, "PC-02")["script"] == "hostname"
+
+
+def test_exec_output_is_capped_and_unknown_host_gets_nothing(client):
+    poll(client)
+    job_id = client.post("/api/pcs/PC-01/exec", json={"script": "a"}, headers=ADMIN).get_json()["id"]
+    next_job(client)
+    client.post("/api/agent/jobs/result", headers=AGENT,
+                json={"host": "PC-01", "id": job_id, "exit_code": 0, "output": "x" * 100000})
+    assert len(client.get("/api/jobs", headers=ADMIN).get_json()[0]["output"]) == 16000
+    assert next_job(client, "TIDAK-ADA") is None
+
+
+def test_exec_history_follows_pc_deletion(client):
+    poll(client)
+    client.post("/api/pcs/PC-01/exec", json={"script": "a"}, headers=ADMIN)
+    client.delete("/api/pcs/PC-01", headers=ADMIN)
+    assert client.get("/api/jobs", headers=ADMIN).get_json() == []
+
+
+def test_commands_page_renders(client):
+    assert client.get("/perintah", headers=ADMIN).status_code == 200

@@ -18,6 +18,9 @@ Perangkat lunak manajemen lab komputer milik sekolah: server Linux (`server/`, F
 - `server/labserver/release.py`: penyimpanan rilis (satu exe aktif, `<folder db>/releases/`); batas versi/ukuran harus sama dengan `agent/labagent/updater.py` (dicek tes)
 - `agent/labagent/killswitch.py`: pemulihan darurat admin (lihat bawah); logikanya murni, bagian Windows ada di `winapi.py`
 
+## Perintah shell ke agent (v1.3.0)
+`POST /api/pcs/<id>/exec` / `/api/all/exec` mengantre baris di tabel `jobs` (db.py); halaman `/perintah`. Pembantu SYSTEM (`helper._job_tick`, tiap 5 dtk) mengambil lewat `/api/agent/jobs/next`, menjalankan di utas sendiri lewat `remote.run_script` (skrip ditulis ke folder pemasangan yang hanya admin bisa tulis, keluaran lewat berkas lalu ekor 16000 karakter), dan melapor lewat `/api/agent/jobs/result`. Satu perintah per PC; pending kedaluwarsa 10 menit (`JOB_PENDING_TTL`). Jangan pernah menyalurkan perintah lewat agent user atau `policy.json`: folder itu bisa ditulis user biasa.
+
 ## Pemulihan darurat (pencopotan lewat drive)
 Untuk saat server tidak bisa dipakai dan PC lab tidak bisa dibuka. `labagent.exe --watch-usb` (tugas `LabAgentKillSwitch`, akun SYSTEM) membaca sekali tiap drive yang terpasang, hanya nama file tingkat pertama. Jika ada file bernama sesuai `kill_file_sha256` di `config.json`, agent dicopot: tugas terjadwal, proses, kebijakan registry, dan foldernya dihapus.
 - Diaktifkan lewat `install.ps1 -KillFileName <nama-file>`; yang disimpan hanya SHA-256 nama itu. Kosong = fitur mati.
@@ -71,6 +74,7 @@ Hari: 0 = Senin ... 6 = Minggu. Bila dashboard di belakang Cloudflare Access, ta
 - Kode Windows tidak bisa diuji di Linux; jangan menyatakan berhasil sebelum dicoba di satu PC Windows.
 
 ## Belum selesai
+- Perintah shell: server dan logika helper/runner lulus tes, tetapi `remote.windows_command` (cmd `chcp 65001`, PowerShell `-File`), `taskkill /T`, dan jalannya sebagai SYSTEM **belum dicoba di Windows**. Uji: kirim `hostname` (cmd) dan `Get-Date` (PowerShell), lalu `ping -n 100 127.0.0.1` dengan batas 5 detik (harus "Waktu habis").
 - Pemulihan darurat: logika dan tes selesai (`tests/test_killswitch.py`), tetapi `winapi.list_drives`, `list_names`, `remove_agent`, mode `--watch-usb`, dan tugas SYSTEM di `install.ps1` **belum dicoba di Windows**. Uji di satu PC: pasang dengan `-KillFileName`, colok drive berisi file itu, pastikan agent hilang. Cek juga pemasangan ulang oleh watchdog tidak terjadi.
 - `labagent.exe` perlu dibangun ulang (`build.ps1`) dan dipasang ulang agar mode `--watch-usb` ada.
 - Profil user yang **tidak sedang login** tidak dibersihkan dari kebijakan registry saat pencopotan (sama dengan `uninstall.ps1`).

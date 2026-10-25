@@ -50,6 +50,20 @@ CREATE TABLE IF NOT EXISTS renames (
     error TEXT,
     created REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pc TEXT NOT NULL,
+    shell TEXT NOT NULL,          -- cmd | powershell
+    script TEXT NOT NULL,
+    timeout INTEGER NOT NULL,     -- detik; lewat ini proses dihentikan
+    state TEXT NOT NULL,          -- pending | running | done | failed | timeout | cancelled | expired | lost
+    exit_code INTEGER,
+    output TEXT,
+    created REAL NOT NULL,
+    started REAL,
+    finished REAL
+);
+CREATE INDEX IF NOT EXISTS jobs_pc_state ON jobs(pc, state);
 CREATE TABLE IF NOT EXISTS notices (
     pc TEXT PRIMARY KEY,          -- PC id, or '*' for a message to every PC
     text TEXT NOT NULL,
@@ -202,6 +216,7 @@ class Store:
                            (prev["alias"], prev["override"], prev["shared_mode"], new))
             db.execute("UPDATE OR IGNORE events SET pc=? WHERE pc=?", (new, old))
             db.execute("UPDATE OR IGNORE notices SET pc=? WHERE pc=?", (new, old))
+            db.execute("UPDATE jobs SET pc=? WHERE pc=?", (new, old))
             db.execute("DELETE FROM pcs WHERE id=?", (old,))
             db.execute("DELETE FROM commands WHERE pc=?", (old,))
             db.execute("DELETE FROM notices WHERE pc=?", (old,))
@@ -237,6 +252,7 @@ class Store:
             db.execute("DELETE FROM commands WHERE pc=?", (pc_id,))
             db.execute("DELETE FROM notices WHERE pc=?", (pc_id,))
             db.execute("DELETE FROM renames WHERE old=?", (pc_id,))
+            db.execute("DELETE FROM jobs WHERE pc=?", (pc_id,))
 
     # commands -----------------------------------------------------------
     def queue_command(self, pc_id: str, action: str, now: float):
@@ -257,6 +273,53 @@ class Store:
                 db.execute("UPDATE commands SET delivered=? WHERE id=?", (now, row["id"]))
             db.execute("DELETE FROM commands WHERE created<?", (now - 86400,))
         return [row["action"] for row in rows]
+
+    # perintah shell (dijalankan pembantu SYSTEM di PC) ---------------------
+    def add_job(self, pc_id: str, shell: str, script: str, timeout: int, now: float) -> int:
+        with self.tx() as db:
+            return db.execute(
+                "INSERT INTO jobs(pc, shell, script, timeout, state, created) VALUES(?, ?, ?, ?, 'pending', ?)",
+                (pc_id, shell, script, timeout, now)).lastrowid
+
+    def take_job(self, pc_id: str, pending_ttl: float, now: float) -> dict | None:
+        """Satu perintah tertunda tertua untuk PC ini, ditandai berjalan (diserahkan paling banyak sekali).
+        Perintah yang menunggu terlalu lama kedaluwarsa dan yang tak kunjung melapor ditandai hilang."""
+        with self.tx() as db:
+            db.execute("UPDATE jobs SET state='expired', finished=? WHERE pc=? AND state='pending' AND created<?",
+                       (now, pc_id, now - pending_ttl))
+            db.execute("UPDATE jobs SET state='lost', finished=? WHERE pc=? AND state='running' AND started+timeout+120<?",
+                       (now, pc_id, now))
+            if db.execute("SELECT 1 FROM jobs WHERE pc=? AND state='running'", (pc_id,)).fetchone():
+                return None
+            row = db.execute("SELECT * FROM jobs WHERE pc=? AND state='pending' ORDER BY id LIMIT 1", (pc_id,)).fetchone()
+            if row is None:
+                return None
+            db.execute("UPDATE jobs SET state='running', started=? WHERE id=?", (now, row["id"]))
+            return dict(row)
+
+    def finish_job(self, job_id: int, pc_id: str, exit_code: int | None, output: str, timed_out: bool, now: float) -> dict | None:
+        """Hasil dari pembantu. Hanya perintah milik PC itu yang sedang berjalan yang diterima."""
+        with self.tx() as db:
+            row = db.execute("SELECT * FROM jobs WHERE id=? AND pc=? AND state='running'", (job_id, pc_id)).fetchone()
+            if row is None:
+                return None
+            state = "timeout" if timed_out else "done" if exit_code == 0 else "failed"
+            db.execute("UPDATE jobs SET state=?, exit_code=?, output=?, finished=? WHERE id=?",
+                       (state, exit_code, output, now, job_id))
+            return {**dict(row), "state": state}
+
+    def cancel_job(self, job_id: int, now: float) -> bool:
+        with self.tx() as db:
+            return db.execute("UPDATE jobs SET state='cancelled', finished=? WHERE id=? AND state='pending'",
+                              (now, job_id)).rowcount > 0
+
+    def list_jobs(self, pc_id: str | None, limit: int):
+        query, args = "SELECT * FROM jobs", []
+        if pc_id:
+            query += " WHERE pc=?"
+            args.append(pc_id)
+        with self.tx() as db:
+            return db.execute(query + " ORDER BY id DESC LIMIT ?", [*args, limit]).fetchall()
 
     # notices ------------------------------------------------------------
     def set_notice(self, pc_id: str, text: str, until: float | None, now: float):
@@ -301,3 +364,4 @@ class Store:
         self._last_prune = now
         with self.tx() as db:
             db.execute("DELETE FROM events WHERE ts<?", (now - retention_days * 86400,))
+            db.execute("DELETE FROM jobs WHERE created<? AND state NOT IN ('pending', 'running')", (now - retention_days * 86400,))

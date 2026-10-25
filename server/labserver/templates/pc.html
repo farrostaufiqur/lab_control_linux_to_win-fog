@@ -86,6 +86,7 @@ function render(pc, data) {
     <button class="btn btn-outline-primary" data-msg="${id}" data-label="${esc(pc.name)}">${ICON.message}Pesan</button>
     <button class="btn btn-outline-dark" data-rename="${id}" data-name="${esc(pc.name === pc.id ? "" : pc.name)}">Nama tampilan</button>
     <button class="btn btn-outline-dark" data-wname="${id}" data-current="${esc(pc.rename ? pc.rename.name : "")}">Nama Windows</button>
+    <a class="btn btn-outline-dark" href="/perintah?pc=${encodeURIComponent(pc.id)}">Perintah…</a>
     <button class="btn btn-outline-warning" data-cmd="restart" data-pc="${id}">Restart</button>
     <button class="btn btn-outline-danger" data-cmd="shutdown" data-pc="${id}">${ICON.off}Matikan</button>
     ${pc.online ? "" : `<button class="btn btn-outline-danger" data-delete="${id}">Hapus dari daftar</button>`}`;

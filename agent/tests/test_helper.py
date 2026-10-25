@@ -37,6 +37,9 @@ class World:
         self.rename_error = None
         self.renamed, self.reports, self.hostname = [], [], "PC-01"
         self.clock = Clock()
+        self.jobs, self.job_runs, self.job_reports = [], [], []
+        self.job_result = (0, "ok", False)
+        self.job_report_failures = 0
 
     def ports(self):
         def fetch():
@@ -55,7 +58,19 @@ class World:
         def apply(sid, locked, taskmgr):
             self.applied.append((sid, locked, taskmgr))
             return None if not self.loaded else []
-        return helper.Ports(own_sha=OLD_SHA, fetch_manifest=fetch, download=download,
+        def fetch_job():
+            return self.jobs.pop(0) if self.jobs else None
+
+        def run_job(job):
+            self.job_runs.append(job)
+            return self.job_result
+
+        def report_job(job_id, code, output, timed_out):
+            if self.job_report_failures:
+                self.job_report_failures -= 1
+                raise OSError("offline")
+            self.job_reports.append((job_id, code, output, timed_out))
+        return helper.Ports(own_sha=OLD_SHA, fetch_job=fetch_job, run_job=run_job, report_job=report_job, fetch_manifest=fetch, download=download,
                             apply_policy=apply, launch_update=self.launched.append, hostname=self.hostname,
                             rename_computer=rename_computer,
                             report_rename=lambda name, ok, error: self.reports.append((name, ok, error)))
@@ -280,3 +295,71 @@ def test_notes_are_capped_and_bad_heartbeat_is_ignored(tmp_path):
     (w.state / "helper.json").write_text("bukan json")
     assert helper.read_helper_notes(w.state) == []
     assert helper.read_helper_notes(tmp_path / "tidak-ada") == []
+
+
+# --- perintah shell dari admin -----------------------------------------------------
+def finish_worker(h):
+    if h._worker is not None:
+        h._worker.join(5)
+
+
+def test_job_is_run_and_reported(tmp_path):
+    w = World(tmp_path)
+    w.jobs.append({"id": 4, "shell": "cmd", "script": "hostname", "timeout": 30})
+    h = w.helper()
+    h.tick(); finish_worker(h)
+    assert [j["id"] for j in w.job_runs] == [4]
+    assert w.job_reports == [(4, 0, "ok", False)]
+
+
+def test_invalid_job_is_ignored_with_a_note(tmp_path):
+    w = World(tmp_path)
+    w.jobs.append({"id": 4, "shell": "bash", "script": "ls", "timeout": 30})
+    h = w.helper()
+    h.tick(); finish_worker(h)
+    assert w.job_runs == [] and any("tidak valid" in line for line in h.log)
+
+
+def test_jobs_checked_only_every_few_seconds(tmp_path):
+    w = World(tmp_path)
+    h = w.helper()
+    h.tick()
+    w.jobs.append({"id": 1, "shell": "cmd", "script": "a", "timeout": 5})
+    h.tick(); finish_worker(h)
+    assert w.job_runs == []
+    w.clock.now += helper.JOB_CHECK_SECONDS + 1
+    h.tick(); finish_worker(h)
+    assert len(w.job_runs) == 1
+
+
+def test_job_report_retried_then_given_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(helper.time, "sleep", lambda s: None)
+    w = World(tmp_path)
+    w.jobs.append({"id": 4, "shell": "cmd", "script": "a", "timeout": 5})
+    w.job_report_failures = 2
+    h = w.helper()
+    h.tick(); finish_worker(h)
+    assert w.job_reports == [(4, 0, "ok", False)]
+
+
+def test_job_runner_crash_is_reported_as_failure(tmp_path):
+    w = World(tmp_path)
+    w.jobs.append({"id": 4, "shell": "cmd", "script": "a", "timeout": 5})
+    ports = w.ports()
+    ports.run_job = lambda job: 1 / 0
+    h = helper.Helper(w.cfg, w.install, ports, clock=w.clock, rand=lambda a, b: 0)
+    h.tick(); finish_worker(h)
+    assert w.job_reports[0][0] == 4 and w.job_reports[0][1] == -1 and "ZeroDivisionError" in w.job_reports[0][2]
+
+
+def test_update_is_not_blocked_by_a_running_job(tmp_path):
+    import threading
+    w = World(tmp_path, manifest=release())
+    gate = threading.Event()
+    ports = w.ports()
+    ports.run_job = lambda job: (gate.wait(5), (0, "", False))[1]
+    w.jobs.append({"id": 4, "shell": "cmd", "script": "ping -t x", "timeout": 600})
+    h = helper.Helper(w.cfg, w.install, ports, clock=w.clock, rand=lambda a, b: 0)
+    h.tick()
+    assert h.finished and w.downloads == 1      # pembaruan jalan walau perintah masih berlangsung
+    gate.set(); finish_worker(h)

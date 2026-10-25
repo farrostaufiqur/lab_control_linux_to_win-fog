@@ -5,7 +5,7 @@ import threading
 import urllib.request
 from pathlib import Path
 
-from . import VERSION, config, helper
+from . import VERSION, config, helper, remote
 from .core import Agent, agent_headers, http_post_json
 
 
@@ -47,9 +47,22 @@ def run_helper(cfg: config.AgentConfig, config_path: Path) -> None:
         http_post_json(cfg.server_url.rstrip("/") + "/api/agent/rename-result",
                        {"host": host, "name": name, "ok": ok, "error": error}, cfg.token, timeout=10)
 
+    def fetch_job():
+        reply = http_post_json(cfg.server_url.rstrip("/") + "/api/agent/jobs/next", {"host": host}, cfg.token, timeout=10)
+        return reply.get("job") if isinstance(reply, dict) else None
+
+    def run_job(job: dict):
+        return remote.run_script(job, config_path.parent / "jobs")
+
+    def report_job(job_id: int, exit_code, output: str, timed_out: bool) -> None:
+        http_post_json(cfg.server_url.rstrip("/") + "/api/agent/jobs/result",
+                       {"host": host, "id": job_id, "exit_code": exit_code, "output": output, "timed_out": timed_out},
+                       cfg.token, timeout=15)
+
     ports = helper.Ports(own_sha=own_sha, fetch_manifest=fetch_manifest, download=download,
                          apply_policy=winapi.apply_user_policies, launch_update=winapi.launch_update,
-                         hostname=host, rename_computer=winapi.rename_computer, report_rename=report_rename)
+                         hostname=host, rename_computer=winapi.rename_computer, report_rename=report_rename,
+                         fetch_job=fetch_job, run_job=run_job, report_job=report_job)
     helper.Helper(cfg, config_path.parent, ports).run_forever(threading.Event())
 
 

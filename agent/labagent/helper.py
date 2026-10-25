@@ -1,9 +1,11 @@
 """Proses pembantu (SYSTEM, `labagent.exe --helper`): logika murni, semua efek samping disuntikkan.
 
-Tiga tugas yang tidak bisa dilakukan agent level-user:
+Empat tugas yang tidak bisa dilakukan agent level-user:
 1. menulis kebijakan registry Ctrl+Alt+Del ke profil user atas permintaan agent (`policy.json`);
 2. mengunduh rilis baru yang ditandatangani dan menukar exe di folder pemasangan;
-3. mengganti nama komputer Windows atas permintaan admin (dari server, lewat jawaban cek rilis).
+3. mengganti nama komputer Windows atas permintaan admin (dari server, lewat jawaban cek rilis);
+4. menjalankan perintah shell kiriman admin. Perintah diambil helper sendiri dari server (bukan dari agent
+   atau berkas di folder user), jadi user biasa tidak punya jalan untuk menyuruh SYSTEM menjalankan sesuatu.
 
 `policy.json` ada di folder yang bisa ditulis user biasa, jadi isinya divalidasi ketat dan hanya
 empat nilai registry yang pernah ditulis. Semua berkas yang menentukan exe (unduhan, skrip, daftar
@@ -19,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import VERSION, updater
+from . import VERSION, remote, updater
 
 SID_RE = re.compile(r"^S-1-(5-21|12-1)(-\d{1,12}){3,4}$")
 POLICY_FILE = "policy.json"
@@ -28,6 +30,7 @@ TICK_SECONDS = 2.0
 POLICY_REAPPLY_SECONDS = 30.0
 UPDATE_CHECK_SECONDS = 60.0
 UPDATE_RETRY_SECONDS = 600.0
+JOB_CHECK_SECONDS = 5.0
 DOWNLOAD_JITTER_SECONDS = 120.0
 HEARTBEAT_FRESH_SECONDS = 15.0
 NOTES_KEPT = 10
@@ -92,6 +95,9 @@ class Ports:
     hostname: str = ""                                         # nama komputer saat helper dimulai
     rename_computer: "Callable[[str], str | None] | None" = None   # -> None bila berhasil, selain itu teks galat
     report_rename: "Callable[[str, bool, str], None] | None" = None  # (nama, berhasil, galat) ke server
+    fetch_job: "Callable[[], object] | None" = None            # -> perintah tertunda untuk PC ini atau None
+    run_job: "Callable[[dict], tuple[int, str, bool]] | None" = None  # -> (kode keluar, keluaran, waktu habis)
+    report_job: "Callable[[int, int | None, str, bool], None] | None" = None  # (id, kode, keluaran, waktu habis)
 
 
 class Helper:
@@ -107,6 +113,8 @@ class Helper:
         self._policy_at = 0.0
         self._errors: list[str] = []
         self._next_check = 0.0
+        self._next_job_check = 0.0
+        self._worker: threading.Thread | None = None   # utas yang sedang menjalankan perintah admin
         self._pending: tuple[str, float] | None = None
         self._renamed_to: str | None = None
         self._bad = self._load_bad()
@@ -159,6 +167,10 @@ class Helper:
             except Exception as exc:
                 self._note(f"cek server gagal: {exc!r}")
                 self._next_check = now + UPDATE_CHECK_SECONDS
+        try:
+            self._job_tick(now)
+        except Exception as exc:
+            self._note(f"cek perintah gagal: {exc!r}")
         if self._notes_dirty:                  # catatan baru langsung terlihat agent, tanpa menunggu tick berikutnya
             self._notes_dirty = False
             self._heartbeat(self._clock())
@@ -177,6 +189,37 @@ class Helper:
             os.replace(tmp, self.state_dir / HEARTBEAT_FILE)
         except OSError:
             pass
+
+    # perintah shell dari admin ---------------------------------------------------
+    def _job_tick(self, now: float) -> None:
+        if self.finished or self.ports.fetch_job is None or self.ports.run_job is None or self.ports.report_job is None:
+            return
+        if now < self._next_job_check or (self._worker is not None and self._worker.is_alive()):
+            return
+        self._next_job_check = now + JOB_CHECK_SECONDS
+        job = self.ports.fetch_job()
+        if job is None:
+            return
+        if not remote.valid_job(job):
+            self._note("perintah dari server tidak valid; diabaikan")
+            return
+        self._worker = threading.Thread(target=self._run_job, args=(job,), daemon=True)
+        self._worker.start()
+
+    def _run_job(self, job: dict) -> None:
+        """Di utas sendiri: perintah yang lama tidak boleh menunda kebijakan registry dan pembaruan."""
+        try:
+            code, output, timed_out = self.ports.run_job(job)
+        except Exception as exc:
+            code, output, timed_out = remote.FAILED_TO_START, f"helper: {exc!r}", False
+        self._note(f"perintah #{job['id']} selesai (kode {code})" if not timed_out else f"perintah #{job['id']} dihentikan (waktu habis)")
+        for attempt in range(3):               # laporan hilang = hasil tak pernah tampil; coba lagi sebentar
+            try:
+                self.ports.report_job(job["id"], code, output, timed_out)
+                return
+            except Exception as exc:
+                self._note(f"lapor perintah #{job['id']} gagal: {exc!r}")
+                time.sleep(2.0 * (attempt + 1))
 
     # kebijakan ---------------------------------------------------------------------
     def _policy_tick(self, now: float) -> None:
